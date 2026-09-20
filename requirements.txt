@@ -1,0 +1,10 @@
+# Railway/Nixpacks looks for requirements.txt at the repository root.
+#
+# The service is deployed from the ROOT, not from backend/, and that is not a
+# stylistic choice: the upload endpoint shells out to src/parse_express.py,
+# src/customer_rfm.py, src/forecast_baseline.py, src/forecast_plan.py and
+# src/export_app.py, and reads data/reference/product_groups.csv. Deploying
+# backend/ alone would leave ingest.py resolving ROOT to "/" and SRC to
+# "/src", and the upload -- the core feature -- would fail at runtime while
+# every read-only page kept working.
+-r backend/requirements.txt

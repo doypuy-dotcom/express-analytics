@@ -81,9 +81,14 @@ def deploy_frontend() -> None:
     api = write_config()
     print(f"  config.js -> API_URL={api}")
 
+    # vercel.json MUST be uploaded, not skipped. It is where the security
+    # headers and the no-store on config.js live, and the deployments API
+    # applies them only if the file is part of the deployment. Skipping it
+    # shipped a site with no X-Frame-Options and a cacheable config.js --
+    # the file that holds the API URL and the Supabase anon key.
     files = []
     for p in sorted(FRONTEND.iterdir()):
-        if p.is_file() and p.name != "vercel.json":
+        if p.is_file():
             files.append({"file": p.name, "data": p.read_text(encoding="utf-8")})
     print(f"  uploading {len(files)} files: {', '.join(f['file'] for f in files)}")
 

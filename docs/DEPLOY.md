@@ -59,9 +59,16 @@ surprise during a demo.
 
 ## 2. Railway — backend
 
-New project → Deploy from GitHub repo → pick this repo → set **root
-directory** to `backend`. Railway reads `backend/railway.json` (Nixpacks,
-healthcheck on `/health`).
+New project → Deploy from GitHub repo → pick this repo. Leave the **root
+directory at the repository root** — do *not* set it to `backend`. Railway
+reads the root `railway.json` (Nixpacks, healthcheck on `/health`), which
+starts uvicorn with `--app-dir backend`.
+
+> **Why not root directory = `backend`.** The upload endpoint shells out to
+> `src/*.py` and reads `data/reference/product_groups.csv`. With only
+> `backend/` deployed, `ingest.py` resolves `ROOT` to `/` and `SRC` to
+> `/src`, and those files are not in the image at all. Every read-only page
+> would still work, so the failure would surface only on the first upload.
 
 Set these variables (Variables tab):
 

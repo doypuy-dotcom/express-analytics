@@ -8,9 +8,9 @@
 //
 // Set by scripts/deploy.py at deploy time. Editable by hand for local work.
 window.CONFIG = {
-  API_URL: "http://127.0.0.1:8099",
-  SUPABASE_URL: "",
-  SUPABASE_ANON_KEY: "",
+  API_URL: "https://backend-production-f146.up.railway.app",
+  SUPABASE_URL: "https://uaxoethbecvdzbniived.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVheG9ldGhiZWN2ZHpibmlpdmVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5MTU4ODEsImV4cCI6MjEwNTQ5MTg4MX0.aLIUCOxwSAw4hd6ZI8mKbhLZoG3ycRP4cL8SZ7kfP0I",
 };
 
 // Local override, handy when pointing a deployed frontend at a local API:
