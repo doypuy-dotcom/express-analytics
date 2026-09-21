@@ -152,7 +152,7 @@ P.overview = async (el) => {
         { key: "n_documents", label: "เอกสาร", num: true, render: r => nf(r.n_documents) },
         { key: "selling_days", label: "วันขาย", num: true },
         { key: "revenue_per_selling_day", label: "ต่อวันขาย", num: true, render: r => baht(r.revenue_per_selling_day) },
-        { key: "n_customers", label: "ลูกค้า", num: true, render: r => nf(r.n_customers) },
+        { key: "n_customers", label: "จำนวนรหัสลูกค้า", num: true, render: r => nf(r.n_customers) },
         { key: "avg_document_value", label: "เฉลี่ย/ใบ", num: true, render: r => baht(r.avg_document_value) },
         { key: "pct_change_per_selling_day", label: "เปลี่ยนแปลง", num: true, render: r => signed(r.pct_change_per_selling_day) },
       ], k, { scroll: false })}</div>`;
@@ -392,7 +392,7 @@ P.customers = async (el) => {
       ${table([
         { key: "segment_th", label: "กลุ่ม" },
         { key: "segment", label: "Segment" },
-        { key: "n_customers", label: "ลูกค้า", num: true, render: r => nf(r.n_customers) },
+        { key: "n_customers", label: "จำนวนรหัสลูกค้า", num: true, render: r => nf(r.n_customers) },
         { key: "customer_share_pct", label: "สัดส่วนลูกค้า", num: true, render: r => nf(r.customer_share_pct, 1) + "%" },
         { key: "revenue", label: "รายได้", num: true, render: r => baht(r.revenue) },
         { key: "revenue_share_pct", label: "สัดส่วนรายได้", num: true, render: r => nf(r.revenue_share_pct, 1) + "%" },
@@ -492,6 +492,19 @@ P.upload = async (el) => {
   };
 };
 
+// The counts come back keyed in English. Without this map the page printed
+// "customers"/"sales_lines" at the operator, which is the one screen that is
+// read by someone who does not read the code.
+const COUNT_LABELS = {
+  cash: "เอกสารขายเงินสด",
+  credit: "เอกสารขายเงินเชื่อ",
+  deposit: "เอกสารรับมัดจำ",
+  sales_lines: "รายการสินค้า",
+  customer_codes: "จำนวนรหัสลูกค้า",
+  products: "รหัสสินค้า",
+  unparsed: "บรรทัดที่อ่านไม่ได้",
+};
+
 function renderResult(result, msg, d) {
   if (d.errors_th?.length && !d.checks) {
     msg.innerHTML = d.errors_th.map(e => `<div class="msg err">${esc(e)}</div>`).join("");
@@ -499,21 +512,22 @@ function renderResult(result, msg, d) {
   }
   const allPass = (d.checks || []).every(c => c.passed);
   msg.innerHTML = d.ok && allPass
-    ? `<div class="msg ok">นำเข้าข้อมูลสำเร็จใน ${d.seconds} วินาที — ตัวเลขตรวจสอบตรงกับค่าอ้างอิงทั้งหมด</div>`
+    ? `<div class="msg ok">นำเข้าข้อมูลสำเร็จใน ${d.seconds} วินาที — ผ่านการตรวจความครบถ้วนทุกข้อ</div>`
     : d.errors_th.map(e => `<div class="msg err">${esc(e)}</div>`).join("");
 
   result.innerHTML = `
     <div class="panel"><h3>ผลการตรวจสอบ</h3>
-      <p class="hint">ค่าเหล่านี้ถูกตรวจทุกครั้งที่นำเข้า หากไม่ตรงแปลว่าข้อมูลหรือโปรแกรมมีบางอย่างเปลี่ยนไป</p>
+      <p class="hint">ตรวจความครบถ้วนของไฟล์ที่อัปโหลด โดยเทียบข้อมูลกับตัวเอง
+        จึงใช้ได้กับข้อมูลชุดใหม่ทุกเดือน ไม่ผูกกับยอดของงวดใดงวดหนึ่ง</p>
       ${table([
-        { key: "label_th", label: "รายการ" },
-        { key: "actual", label: "ค่าที่ได้", num: true, render: r => nf(r.actual, r.check === "revenue_ex_vat" ? 2 : 0) },
-        { key: "expected", label: "ค่าอ้างอิง", num: true, render: r => nf(r.expected, r.check === "revenue_ex_vat" ? 2 : 0) },
-        { key: "passed", label: "ผล", render: r => r.passed ? `<span class="pill good">ตรงกัน</span>` : `<span class="pill bad">ไม่ตรง</span>` },
+        { key: "label_th", label: "รายการที่ตรวจ" },
+        { key: "value", label: "ค่าที่ได้", render: r => esc(String(r.value ?? "-")) },
+        { key: "detail_th", label: "รายละเอียด", render: r => `<span class="muted">${esc(r.detail_th || "")}</span>` },
+        { key: "passed", label: "ผล", render: r => r.passed ? `<span class="pill good">ผ่าน</span>` : `<span class="pill bad">ไม่ผ่าน</span>` },
       ], d.checks || [], { scroll: false })}
       <h3 style="margin-top:18px">จำนวนที่นำเข้า</h3>
       <div class="cards" style="margin-top:10px">
-        ${Object.entries(d.counts || {}).map(([k, v]) => `<div class="card"><div class="label">${esc(k)}</div><div class="value">${nf(v)}</div></div>`).join("")}
+        ${Object.entries(d.counts || {}).map(([k, v]) => `<div class="card"><div class="label">${esc(COUNT_LABELS[k] || k)}</div><div class="value">${nf(v)}</div></div>`).join("")}
       </div>
       <h3 style="margin-top:18px">ขั้นตอน</h3>
       <ul class="steps">${(d.steps || []).map(s =>

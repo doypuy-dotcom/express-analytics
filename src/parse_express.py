@@ -1280,33 +1280,22 @@ def apply_customer_aliases(headers_df: pd.DataFrame, customers_df: pd.DataFrame,
 # --------------------------------------------------------------------------
 
 
-def validate(headers_df, lines_df, deposits_df, apps_df, products_df, customers_df,
-             notes_df, unparsed, counts, weekly_df=None, monthly_df=None,
-             groups_df=None):
-    """Print the QA report described in the task brief."""
-    p = print
-    p("=" * 78)
-    p("EXPRESS PARSE - VALIDATION REPORT")
-    p("=" * 78)
+def reconcile_documents(headers_df, lines_df, apps_df) -> pd.DataFrame:
+    """Per-document check that the line items add up to the header.
 
-    p("\n1. DOCUMENTS PARSED")
-    for label, n, expected in counts:
-        flag = "" if expected is None else ("  OK" if n == expected else f"  !! expected ~{expected}")
-        p(f"   {label:<34} {n:>7,}{flag}")
-    p(f"   {'sales line items':<34} {len(lines_df):>7,}")
-    p(f"   {'deposit applications':<34} {len(apps_df):>7,}")
-    p(f"   {'free-text remark lines':<34} {len(notes_df):>7,}")
+    goods_value is NET of any deposit/receipt voucher applied to the document,
+    so the identity is:
 
-    cancelled = int(headers_df["is_cancelled"].sum()) + (
-        int(deposits_df["is_cancelled"].sum()) if not deposits_df.empty else 0
-    )
-    p(f"   {'cancelled documents (* prefix)':<34} {cancelled:>7,}")
+        sum(line amounts) - applied vouchers - header discount == goods_value
 
-    # --- header vs lines reconciliation ------------------------------------
-    # goods_value is NET of any deposit/receipt voucher applied to the document,
-    # so the identity to check is:
-    #     sum(line amounts) - applied vouchers - header discount == goods_value
-    p("\n2. HEADER goods_value vs SUM(line amount_ex_vat)")
+    Returns the header frame with line_sum, diff and a `status` column
+    classifying each residual by its known business cause.
+
+    Extracted from validate() so the upload page and the CLI report share ONE
+    implementation. This is the check that survives new data -- it compares the
+    file against itself rather than against a remembered total, so it still
+    means something on next month's export.
+    """
     sums = lines_df.groupby("doc_no", dropna=True)["amount_ex_vat"].sum(min_count=1)
     nulls = lines_df.assign(_n=lines_df["amount"].isna()).groupby("doc_no")["_n"].sum()
     vouchers = (
@@ -1344,6 +1333,37 @@ def validate(headers_df, lines_df, deposits_df, apps_df, products_df, customers_
         return "unexplained"
 
     chk["status"] = chk.apply(classify, axis=1)
+    return chk
+
+
+def validate(headers_df, lines_df, deposits_df, apps_df, products_df, customers_df,
+             notes_df, unparsed, counts, weekly_df=None, monthly_df=None,
+             groups_df=None):
+    """Print the QA report described in the task brief."""
+    p = print
+    p("=" * 78)
+    p("EXPRESS PARSE - VALIDATION REPORT")
+    p("=" * 78)
+
+    p("\n1. DOCUMENTS PARSED")
+    for label, n, expected in counts:
+        flag = "" if expected is None else ("  OK" if n == expected else f"  !! expected ~{expected}")
+        p(f"   {label:<34} {n:>7,}{flag}")
+    p(f"   {'sales line items':<34} {len(lines_df):>7,}")
+    p(f"   {'deposit applications':<34} {len(apps_df):>7,}")
+    p(f"   {'free-text remark lines':<34} {len(notes_df):>7,}")
+
+    cancelled = int(headers_df["is_cancelled"].sum()) + (
+        int(deposits_df["is_cancelled"].sum()) if not deposits_df.empty else 0
+    )
+    p(f"   {'cancelled documents (* prefix)':<34} {cancelled:>7,}")
+
+    # --- header vs lines reconciliation ------------------------------------
+    # goods_value is NET of any deposit/receipt voucher applied to the document,
+    # so the identity to check is:
+    #     sum(line amounts) - applied vouchers - header discount == goods_value
+    p("\n2. HEADER goods_value vs SUM(line amount_ex_vat)")
+    chk = reconcile_documents(headers_df, lines_df, apps_df)
     mism = chk[~chk["status"].isin(("ok", "ok_vat_rounding"))]
     ok = len(chk) - len(mism)
     p(f"   VAT-inclusive documents      : {int(chk['vat_inclusive'].sum()):,} "
@@ -1512,9 +1532,9 @@ def run_pipeline(
     result to Postgres. Neither re-implements a step, so the website and the
     local run cannot drift apart -- which is the point, because the reference
     figures (44,493,479.89 revenue; 6,088 cash; 168 credit) are asserted
-    against both.
+    against this function in tests/test_reference_figures.py.
 
-    Returns {tables, review, counts, notes_df, unparsed}.
+    Returns {tables, review, counts, notes_df, unparsed, dupes_collapsed}.
     """
     headers: list[dict] = []
     lines_out: list[dict] = []
@@ -1537,7 +1557,13 @@ def run_pipeline(
     lines_df = pd.DataFrame(lines_out)
     notes_df = pd.DataFrame(notes)
     deposits_df = pd.DataFrame(deposits)
-    apps_df = dedupe_applications(pd.DataFrame(applications))
+    # Count what the dedupe collapses: the same deposit->document link is
+    # printed by BOTH reports, so this number is normally large and healthy.
+    # The upload page reports it so "duplicates handled" is an observation
+    # rather than an assertion about one particular dataset.
+    _apps_raw = pd.DataFrame(applications)
+    apps_df = dedupe_applications(_apps_raw)
+    n_dupes_collapsed = int(len(_apps_raw) - len(apps_df))
 
     # Attach remarks to their header so nothing typed by the operator is lost.
     if not notes_df.empty:
@@ -1601,6 +1627,7 @@ def run_pipeline(
         ],
         "notes_df": notes_df,
         "unparsed": unparsed,
+        "dupes_collapsed": n_dupes_collapsed,
     }
 
 

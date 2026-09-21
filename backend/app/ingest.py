@@ -1,10 +1,15 @@
 """Upload -> parse -> derive -> Postgres.
 
-The upload endpoint must reproduce the numbers the local pipeline produces:
-revenue 44,493,479.89, 6,088 cash documents, 168 credit. It achieves that by
-calling exactly the same code -- parse_express.run_pipeline for the parse, and
-the existing scripts for the derived layers -- rather than reimplementing any
-of it against the database. Anything else would drift.
+The upload endpoint must reproduce the numbers the local pipeline produces. It
+achieves that by calling exactly the same code -- parse_express.run_pipeline
+for the parse, and the existing scripts for the derived layers -- rather than
+reimplementing any of it against the database. Anything else would drift.
+
+That equivalence is asserted in tests/test_reference_figures.py against the
+reference export (44,493,479.89 / 6,088 / 168). It is deliberately NOT asserted
+here: those totals are facts about one month's file, and checking them on every
+upload would fail the first import of new data while the import was fine. What
+this module checks on upload is internal consistency -- see data_checks().
 
 The derived scripts (RFM, backtest, forecast, app export) read and write CSVs
 on disk, so the uploaded files are staged into data/raw/ and the scripts are
@@ -144,25 +149,101 @@ def run_derived() -> list[Step]:
     return steps
 
 
-def reference_checks(counts: dict, revenue: float) -> list[dict]:
-    """The acceptance criteria, asserted on every upload.
+def data_checks(tables: dict, unparsed: list, dup_docs: int) -> list[dict]:
+    """Integrity checks that are valid for ANY upload, not just this dataset.
 
-    These are the figures the whole project is validated against. Checking
-    them here means a regression shows up in the upload response rather than
-    silently populating the dashboard with wrong numbers.
+    The previous version of this function asserted the three acceptance
+    figures (44,493,479.89 / 6,088 / 168). Those are correct for the current
+    export and WRONG for every future one: the first upload of next month's
+    data would have painted the page red while the import was perfectly fine,
+    which trains the operator to ignore the one panel that is supposed to mean
+    something. They now live in tests/test_reference_figures.py, where a fixed
+    input has a fixed expected output and the assertion keeps its meaning.
+
+    What replaces them are four checks that compare the upload against ITSELF:
+
+      1. line totals reconcile to the document headers (a percentage)
+      2. no unparsed rows -- every line of every report was understood
+      3. duplicate documents collapsed, none left behind
+      4. the date range is covered with no missing month
+
+    Each returns a human-readable value plus a Thai detail string, because a
+    bare "pass" tells the operator nothing about what was actually verified.
     """
-    expected = [
-        ("revenue_ex_vat", revenue, 44_493_479.89, 0.01, "รายได้ (ไม่รวม VAT)"),
-        ("cash_documents", counts.get("cash", 0), 6088, 0, "เอกสารขายเงินสด"),
-        ("credit_documents", counts.get("credit", 0), 168, 0, "เอกสารขายเงินเชื่อ"),
-    ]
-    out = []
-    for key, actual, want, tol, label_th in expected:
-        passed = abs(float(actual) - float(want)) <= tol
+    import parse_express  # noqa: E402  (sys.path set at module import)
+
+    headers = tables["sales_header.csv"]
+    lines = tables["sales_lines.csv"]
+    apps = tables["deposit_applications.csv"]
+
+    out: list[dict] = []
+
+    # --- 1. lines vs headers ---------------------------------------------
+    # Same implementation the CLI validation report uses, so the page and the
+    # report can never disagree.
+    chk = parse_express.reconcile_documents(headers, lines, apps)
+    n = len(chk)
+    ok = int(chk["status"].isin(("ok", "ok_vat_rounding")).sum())
+    pct = round(100.0 * ok / n, 2) if n else 0.0
+    bad = n - ok
+    out.append({
+        "check": "line_reconciliation",
+        "label_th": "ยอดรวมรายการสินค้า ตรงกับหัวเอกสาร",
+        "value": f"{pct:.2f}%",
+        # 99.5% rather than 100%: a genuine Express export can carry a few
+        # documents with blank line amounts, and failing the whole import for
+        # that would be wrong. Anything below this is a parser problem.
+        "passed": pct >= 99.5,
+        "detail_th": f"ตรงกัน {ok:,} จาก {n:,} เอกสาร"
+                     + (f" · ไม่ตรง {bad:,}" if bad else ""),
+    })
+
+    # --- 2. unparsed rows -------------------------------------------------
+    n_unparsed = len(unparsed)
+    out.append({
+        "check": "unparsed_rows",
+        "label_th": "บรรทัดที่อ่านไม่ได้",
+        "value": f"{n_unparsed:,}",
+        "passed": n_unparsed == 0,
+        "detail_th": "อ่านได้ครบทุกบรรทัด" if n_unparsed == 0
+                     else f"มี {n_unparsed:,} บรรทัดที่อ่านไม่ได้ ดู _unparsed.csv",
+    })
+
+    # --- 3. duplicates ----------------------------------------------------
+    # The upsert is keyed by doc_no, so a duplicate that survived to here
+    # would silently overwrite a real document rather than raise.
+    left = int(headers["doc_no"].duplicated().sum())
+    out.append({
+        "check": "duplicates_handled",
+        "label_th": "เอกสารซ้ำ",
+        "value": f"{dup_docs:,}",
+        "passed": left == 0,
+        "detail_th": (f"รวมเอกสารซ้ำ {dup_docs:,} รายการแล้ว " if dup_docs
+                      else "ไม่พบเอกสารซ้ำ ")
+                     + f"· เลขที่เอกสารไม่ซ้ำกัน {headers['doc_no'].nunique():,} รายการ",
+    })
+
+    # --- 4. date coverage -------------------------------------------------
+    dates = headers["doc_date_iso"].dropna()
+    if len(dates):
+        months = sorted(dates.str.slice(0, 7).unique())
+        span = pd.period_range(months[0], months[-1], freq="M").astype(str).tolist()
+        missing = [m for m in span if m not in months]
         out.append({
-            "check": key, "label_th": label_th,
-            "actual": actual, "expected": want, "passed": passed,
+            "check": "date_coverage",
+            "label_th": "ช่วงวันที่ของข้อมูล",
+            "value": f"{dates.min()} – {dates.max()}",
+            "passed": not missing,
+            "detail_th": f"{len(months)} เดือน"
+                         + (f" · ขาดเดือน {', '.join(missing)}" if missing
+                            else " · ต่อเนื่องไม่ขาดเดือน"),
         })
+    else:
+        out.append({
+            "check": "date_coverage", "label_th": "ช่วงวันที่ของข้อมูล",
+            "value": "-", "passed": False, "detail_th": "ไม่พบวันที่ในเอกสาร",
+        })
+
     return out
 
 
@@ -218,18 +299,28 @@ def ingest(routed: dict[str, tuple[str, bytes]], write_db: bool = True,
     headers = tables["sales_header.csv"]
     lines = tables["sales_lines.csv"]
 
+    live = lines[~lines["is_cancelled"].fillna(False)]
+    live_headers = headers[~headers["is_cancelled"].fillna(False)]
+
     res.counts = {
         "cash": int((headers["sale_type"] == "cash").sum()),
         "credit": int((headers["sale_type"] == "credit").sum()),
         "deposit": int(len(tables["deposits.csv"])),
         "sales_lines": int(len(lines)),
-        "customers": int(len(tables["customers.csv"])),
+        # Customer CODES, not rows of customers.csv. That table is keyed by
+        # customer_name, so it lost the handful of codes whose name is blank
+        # in the export and reported 1,478 where the customers page -- which
+        # is built per code -- showed 1,483. One entity, two numbers, and the
+        # smaller one was on the page that claimed to say what was imported.
+        # Counting codes on non-cancelled headers is the same grain that
+        # customer_rfm uses, so the two pages now agree by construction.
+        "customer_codes": int(live_headers["customer_code"].nunique()),
         "products": int(len(tables["products.csv"])),
         "unparsed": int(len(parsed["unparsed"])),
     }
-    live = lines[~lines["is_cancelled"].fillna(False)]
     res.revenue_ex_vat = round(float(live["amount_ex_vat"].sum()), 2)
-    res.checks = reference_checks(res.counts, res.revenue_ex_vat)
+    res.checks = data_checks(tables, parsed["unparsed"],
+                             int(parsed.get("dupes_collapsed", 0)))
 
     # --- 2. write clean CSVs (the derived scripts read them) --------------
     t0 = time.time()

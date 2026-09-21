@@ -184,6 +184,45 @@ happened only in the customer dimension. Now **0**.
 per-customer analysis. Review files are an input to a human decision, not an
 output of the parse.
 
+### 4.5 บ-047 is a real account, not a walk-in catch-all
+
+**Decision.** Keep บ-047 in the RFM segments. No exclusion.
+
+**Question.** บ-047 carries 194 invoices and sits at the top of the customers
+page with roughly 18x the invoice count of the row beneath it, which is the
+shape a generic "หน้าร้าน / เงินสด" code normally has. If it were a catch-all,
+every RFM segment built on it would be meaningless — one row would be an
+aggregate of hundreds of unrelated buyers scored as a single Champion.
+
+**Evidence against it being a catch-all.** A catch-all code is one code
+carrying many different buyers, so the discriminating test is how many distinct
+`customer_name` values ride on the code — not the invoice count.
+
+| Test | บ-047 | Expected of a catch-all |
+|---|---|---|
+| Distinct customer names on the code | **1** (`บุญทวี เมทัล ชีท`, all 194) | many |
+| Average ticket, ex VAT | **10,428** | small — below the 3,795 median |
+| Sale type | 187 cash / 7 credit | ~all cash, never credit |
+| Months active | 9 of 9, continuous | often bursty |
+| Rank by invoice count | #1, but only **1.4x** #2 (`ง-001`, 138) | far above everything |
+
+Only 2 of 1,483 codes carry more than one name, and both are the known
+name-truncation merges in §4.1. A generic code would show dozens.
+
+**Where the "20x" came from.** The customers page sorts by revenue, and the row
+below บ-047 (`ว-428`) has 11 invoices — so the page reads 194 against 11. The
+true second-highest invoice count is 138. The ratio was an artefact of the sort
+order, not a property of the customer.
+
+**Conclusion.** A metal-sheet reseller buying twice a week at ~10k a time, on
+credit terms, under one consistent name. That is a high-frequency trade
+account, and its Champions classification is correct. The one mildly unusual
+signal — 5 salespeople write to it, against a median of 1 — is normal for a
+large trade account, and would not on its own displace the single-name finding.
+
+Revenue totals were never in question either way: the code is 4.55% of revenue
+and stays in every revenue figure regardless of how it is segmented.
+
 ---
 
 ## 5. Products, units and groups
