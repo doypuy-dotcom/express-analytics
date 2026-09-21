@@ -10,7 +10,7 @@
     {
       "name": "api",
       "runtimeExecutable": "python",
-      "runtimeArgs": [".tmp/run_api.py"],
+      "runtimeArgs": ["scripts/run_local_api.py"],
       "port": 8099
     }
   ]
