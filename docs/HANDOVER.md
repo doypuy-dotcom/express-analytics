@@ -44,24 +44,37 @@ They live in two places only:
 If `backend/.env` is lost, every value in it can be re-issued from the
 Supabase, Railway, Vercel and GitHub dashboards. Nothing in it is irreplaceable.
 
-**Outstanding:** the two test-account passwords (below) were shared in plain
-text during development and have **not been rotated**. Rotate them in Supabase
-Auth before anyone outside the project is given access.
+The two test-account passwords were shared in plain text during development.
+Both accounts have since been **deleted and recreated in Supabase Auth with
+new passwords set by the owner**, so the exposed passwords no longer exist.
+`scripts/verify_roles_live.py` was then run against the deployed site with all
+three passwords and **passed every check**, which confirms both the new logins
+and their role scoping.
+
+The new passwords are known only to the owner. They are not in this repo, not
+in `backend/.env`, and were never seen by anyone else. To run the live role
+checks, supply them at the point of use and do not persist them:
+
+```
+ROLE_TEST_SALES03_PASSWORD, ROLE_TEST_MANAGER_PASSWORD, ROLE_TEST_CEO_PASSWORD
+```
 
 ### Accounts
 
 | Email | Role | Notes |
 |---|---|---|
 | `doykong1369@gmail.com` | ceo | The owner. Only account that may upload data or change permissions. |
-| `manager@express.local` | sales_manager | Test account. Password not rotated. |
-| `sales03@express.local` | sales | Test account, scoped to code `03`. Password not rotated. |
+| `manager@express.local` | sales_manager | Test account. Recreated; password rotated. |
+| `sales03@express.local` | sales | Test account, scoped to code `03`. Recreated; password rotated. |
 
 ---
 
 ## 2. What it costs
 
-Roughly **$5 per month (about 180 baht)**, and the reason is a flat plan fee
-rather than usage — the actual compute is close to free.
+Roughly **$5 per month (about 180 baht)** once Railway is on a paid plan, and
+the reason is a flat plan fee rather than usage — the actual compute is close
+to free. Right now it is $0, because Railway is still on the trial, which ends
+**2026-10-20** and must be upgraded (see below).
 
 **Railway** is the only thing that will ever charge. The project is currently on
 `subscriptionType: "trial"`, which includes **$5 of usage**. Measured over a
@@ -86,24 +99,33 @@ not at all.
 **Vercel** is on the free Hobby plan (the account has no paid plan attached).
 A static site with no build step will not leave that tier.
 
-**Supabase** is assumed to be on the free tier. ⚠️ **Verify this in the
-dashboard** — it is the one cost fact here that was not confirmed from an API.
-It matters for a second reason: the Supabase free tier **pauses a project after
-7 days with no activity**, and a paused project takes the whole site down. If
-the dashboard will genuinely sit unused for a week at a time, either upgrade
+**Supabase** is on the **Free plan** (confirmed in the dashboard). That costs
+nothing, but it carries one operational risk worth more attention than the
+money: the Free plan **pauses a project after 7 days with no activity**, and a
+paused project takes the whole site down. If the dashboard will genuinely sit
+unused for a week at a time — over a long holiday, say — either upgrade
 Supabase or arrange something to touch the database weekly.
 
-### Trial expiry
+### Trial expiry — action required by 2026-10-20
 
-Railway reports the project as a trial and reports the $5 included-usage
-allowance, but **does not expose a trial end date through its API**, so no
-date is asserted here. The project was created **2026-09-20**.
+Railway is on the **trial**, not a paid plan. The trial is **$5 of credit or
+30 days, whichever runs out first**. The project was created **2026-09-20**,
+so the trial ends on or about **2026-10-20**.
 
-Check `Project → Settings → Usage` in the Railway dashboard for the actual
-remaining balance and expiry, and set a calendar reminder. **When the trial
-ends the service stops and the whole site goes down** — the frontend stays up
-on Vercel but every page will fail to load data. Upgrading to Hobby before
-that happens avoids any outage.
+**The date expires before the money does.** At the measured burn of about
+$1.64 per 30 days, the $5 credit would last roughly three months — but the
+30-day clock does not care, and it is the binding constraint. Do not read a
+healthy credit balance as time in hand.
+
+**The service must be upgraded to Hobby ($5/month) to stay online.** When the
+trial ends the backend stops. The frontend stays up on Vercel and users can
+still sign in, which makes the failure look stranger than it is: every page
+loads and then fails to fetch its data. Nothing is lost — the database is
+Supabase, not Railway — and upgrading restores service, but the site is down
+until someone notices and acts.
+
+Upgrade at `Project → Settings → Usage` in the Railway dashboard. Do it before
+2026-10-20 and there is no outage at all. Set a calendar reminder now.
 
 ---
 
@@ -226,9 +248,11 @@ python -m pytest tests/ -q             # expect 26 passed
 ```
 
 `scripts/verify_roles_live.py` re-checks the same boundaries against the
-deployed site using real logins. `scripts/preview_roles.py` renders each role's
-real payload into a static local copy of the site, so frontend changes can be
-checked in a browser without touching production and without any password.
+deployed site using real logins; it was last run against all three accounts
+after the password rotation and passed every check. `scripts/preview_roles.py`
+renders each role's real payload into a static local copy of the site, so
+frontend changes can be checked in a browser without touching production and
+without any password.
 
 Two things that have bitten before, both recorded in `docs/DEPLOY.md`:
 
@@ -245,23 +269,24 @@ to the internet with no login.
 
 ## 6. Known gaps, in the order they should be closed
 
-1. **Rotate the two test-account passwords** (section 1).
-2. **Confirm the Supabase plan** and decide about the 7-day pause (section 2).
-3. **Set a reminder for the Railway trial** (section 2).
-4. **Two-factor authentication is not implemented.** Supabase Auth supports it;
+1. **Upgrade Railway to Hobby before 2026-10-20.** The only item here with a
+   deadline, and the only one that takes the site down if missed (section 2).
+2. **Decide about the Supabase 7-day idle pause** (section 2). No cost, but it
+   is the second way this site can go down while nothing is wrong with it.
+3. **Two-factor authentication is not implemented.** Supabase Auth supports it;
    it was deferred, not rejected.
-5. **There is no audit log.** Nothing records who uploaded what, or who changed
+4. **There is no audit log.** Nothing records who uploaded what, or who changed
    whose role.
-6. **Five pairs of customers with near-identical names have not been merged.**
+5. **Five pairs of customers with near-identical names have not been merged.**
    They are deliberately left separate pending the owner's confirmation —
    merging the wrong pair mixes two customers' purchase histories and is hard
    to undo. See `docs/METHODS.md` §4.4.
-7. **Credit-note style vouchers are not netted out of revenue** (79 vouchers,
+6. **Credit-note style vouchers are not netted out of revenue** (79 vouchers,
    166,752.42 baht, ≈0.4%), pending confirmation that they are genuine returns.
    See `docs/METHODS.md` §3.2.
-8. **The July→August drop is unexplained** beyond the part attributable to
+7. **The July→August drop is unexplained** beyond the part attributable to
    customers switching product groups. See `docs/METHODS.md` §7.3.
-9. **`railway.json` stops working on 2026-12-01.** Railway has deprecated
+8. **`railway.json` stops working on 2026-12-01.** Railway has deprecated
    config-as-code in favour of `.railway/railway.ts`; the CLI warns on every
    deploy. Run `railway config migrate` before that date. Nothing breaks
    today, and the region setting does not live in that file anyway.
