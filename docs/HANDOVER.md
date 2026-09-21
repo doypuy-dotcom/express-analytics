@@ -204,6 +204,20 @@ deploy anything.** Both halves are manual:
 python scripts/deploy.py frontend      # frontend (Vercel)
 ```
 
+The token in `backend/.env` is named `RAILWAY_TOKEN`, but it is an **account**
+token, and the CLI reads account tokens from `RAILWAY_API_TOKEN` —
+`RAILWAY_TOKEN` is where it looks for a *project* token. Exporting it under the
+name it has in the file gets "Not signed in"; exporting it under both names
+gets "Invalid RAILWAY_TOKEN". Set `RAILWAY_API_TOKEN` and leave `RAILWAY_TOKEN`
+unset:
+
+```bash
+RAILWAY_API_TOKEN="$RAILWAY_TOKEN" RAILWAY_TOKEN= ./.tmp/railway.exe up
+```
+
+`scripts/deploy.py` talks to the REST APIs directly and is unaffected — it
+needs `VERCEL_TOKEN`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `API_URL`.
+
 Before deploying, run the tests — they are what stops one role's data reaching
 another:
 
@@ -247,3 +261,7 @@ to the internet with no login.
    See `docs/METHODS.md` §3.2.
 8. **The July→August drop is unexplained** beyond the part attributable to
    customers switching product groups. See `docs/METHODS.md` §7.3.
+9. **`railway.json` stops working on 2026-12-01.** Railway has deprecated
+   config-as-code in favour of `.railway/railway.ts`; the CLI warns on every
+   deploy. Run `railway config migrate` before that date. Nothing breaks
+   today, and the region setting does not live in that file anyway.
