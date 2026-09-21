@@ -70,6 +70,29 @@ function signed(v, d = 1) {
   return `<span class="${cls}">${pct(v, d)}</span>`;
 }
 
+// Dates arrive ISO ("2025-12", "2026-08-31") and were printed that way. Every
+// other document in this office is dated in the Buddhist Era, so 2025-12 read
+// as a year three years in the past to the people using the page.
+//
+// DISPLAY ONLY, and that is the whole design: nothing here is ever used as a
+// key, a sort value or an API argument. The payloads stay ISO, the charts are
+// still ordered by the ISO string, and `by_group_month` is still keyed on it.
+// A Buddhist-Era label that leaked into a key would sort ก.พ. before ม.ค. and
+// silently reorder every chart on the site.
+const MONTH_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+                  "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+// Anything that is not an ISO date falls through unchanged rather than
+// rendering "NaN undefined" -- a blank last_sale_date is a real row.
+const monthTH = (iso) => {
+  const m = /^(\d{4})-(\d{2})/.exec(String(iso ?? ""));
+  return m ? `${MONTH_TH[+m[2] - 1]} ${+m[1] + 543}` : esc(iso ?? "");
+};
+const dateTH = (iso) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ""));
+  return m ? `${+m[3]} ${MONTH_TH[+m[2] - 1]} ${+m[1] + 543}` : esc(iso ?? "");
+};
+
 // A group that has sold nothing for four weeks still had a forecast and a
 // reorder point printed against it -- group 05 was advertising 251 m to order
 // and a 323 m reorder level months after it stopped moving. Both numbers are
@@ -161,8 +184,69 @@ function loginView() {
 // ---------------------------------------------------------------- pages
 const P = {};
 
+// "สิ่งที่ต้องดูวันนี้" summarises two OTHER pages, so it is built from their
+// endpoints -- and only for a role that is allowed to open them. A rep who
+// cannot reach «พยากรณ์» must not be handed its headline count on the front
+// page; that would be the same leak by a shorter route.
+//
+// `allowed()` mirrors /api/me and is a courtesy. The fetch is wrapped anyway:
+// the server is the control, and a 403 from a side panel must not take the
+// whole overview page down with it.
+async function sidePanelData() {
+  const side = async (path, key) => {
+    if (!allowed(key)) return null;
+    try { return await api(path); } catch { return null; }
+  };
+  const [forecast, stock] = await Promise.all([
+    side("/api/forecast", "forecast"),
+    side("/api/stock", "stock"),
+  ]);
+  return { forecast, stock };
+}
+
+function todayPanel({ forecast, stock }) {
+  const tiles = [];
+  if (forecast) {
+    const alerts = (forecast.trend_alerts || [])
+      .filter(r => r.alert === true || r.alert === "true");
+    const down = alerts.filter(r => r.direction === "falling").length;
+    const up = alerts.filter(r => r.direction === "rising").length;
+    tiles.push({
+      href: "#forecast", n: alerts.length, unit: "กลุ่มสินค้า",
+      label: "แนวโน้มเปลี่ยน",
+      sub: alerts.length ? `ลดลง ${down} · เพิ่มขึ้น ${up}` : "ไม่มีสัญญาณเตือน",
+    });
+  }
+  if (stock) {
+    const sc = stock.stock_check || [];
+    const risk = sc.filter(r => r.risk_level === "risk").length;
+    const watch = sc.filter(r => r.risk_level === "watch").length;
+    tiles.push({
+      href: "#stock", n: risk, unit: "รายการ",
+      label: "ควรไปตรวจสอบสต็อก",
+      sub: watch ? `และเฝ้าระวังอีก ${nf(watch)} รายการ` : "ไม่มีรายการเฝ้าระวัง",
+    });
+  }
+  if (!tiles.length) return "";
+
+  // Both source pages are company-level whatever the reader's scope, so the
+  // panel says so. Without it a rep reads "12 กลุ่มสินค้า" directly under
+  // their own revenue total and takes it for their own.
+  const note = ME?.role === "ceo" ? ""
+    : `<p class="hint">ตัวเลขสองช่องนี้เป็นของทั้งบริษัท ไม่ใช่เฉพาะยอดของคุณ</p>`;
+  const quiet = tiles.every(t => t.n === 0);
+  return `<div class="panel"><h3>สิ่งที่ต้องดูวันนี้</h3>${note}
+    ${quiet ? `<p class="hint">ไม่มีรายการที่ต้องดูวันนี้</p>` : ""}
+    <div class="cards">${tiles.map(t => `
+      <a class="card" href="${t.href}" style="text-decoration:none;color:inherit">
+        <div class="label">${esc(t.label)}</div>
+        <div class="value">${nf(t.n)}</div>
+        <div class="sub">${esc(t.unit)} · ${esc(t.sub)}</div>
+      </a>`).join("")}</div></div>`;
+}
+
 P.overview = async (el) => {
-  const d = await api("/api/overview");
+  const [d, side] = await Promise.all([api("/api/overview"), sidePanelData()]);
   const t = d.totals, k = d.kpi_monthly;
   el.innerHTML = `
     ${scopeBanner(d.scope)}
@@ -171,28 +255,34 @@ P.overview = async (el) => {
         <div class="value">${baht(t.revenue_ex_vat)}</div><div class="sub">${t.months} เดือน</div></div>
       <div class="card"><div class="label">จำนวนเอกสาร</div>
         <div class="value">${nf(t.documents)}</div><div class="sub">ใบขาย</div></div>
-      <div class="card"><div class="label">เดือนล่าสุด (${esc(t.latest_month)})</div>
+      <div class="card"><div class="label">เดือนล่าสุด (${monthTH(t.latest_month)})</div>
         <div class="value">${baht(t.latest_revenue)}</div>
         <div class="sub">ต่อวันขาย ${signed(t.latest_pct_change_per_selling_day)}</div></div>
     </div>
+    ${todayPanel(side)}
     <div class="panel"><h3>รายได้รายเดือน</h3>
       <p class="hint">แท่ง = รายได้รวม · เส้น = รายได้ต่อวันที่มีการขาย (ตัดผลของจำนวนวันทำการที่ต่างกันออก)</p>
       <div class="chart-wrap"><canvas id="c1"></canvas></div></div>
     <div class="panel"><h3>ตารางรายเดือน</h3>
       ${table([
-        { key: "month", label: "เดือน" },
+        { key: "month", label: "เดือน", render: r => monthTH(r.month) },
         { key: "revenue_ex_vat", label: "รายได้", num: true, render: r => baht(r.revenue_ex_vat) },
         { key: "n_documents", label: "เอกสาร", num: true, render: r => nf(r.n_documents) },
         { key: "selling_days", label: "วันขาย", num: true },
         { key: "revenue_per_selling_day", label: "ต่อวันขาย", num: true, render: r => baht(r.revenue_per_selling_day) },
         { key: "n_customers", label: "จำนวนรหัสลูกค้า", num: true, render: r => nf(r.n_customers) },
         { key: "avg_document_value", label: "เฉลี่ย/ใบ", num: true, render: r => baht(r.avg_document_value) },
-        { key: "pct_change_per_selling_day", label: "เปลี่ยนแปลง", num: true, render: r => signed(r.pct_change_per_selling_day) },
+        // Named for what it measures. Plain "เปลี่ยนแปลง" next to a revenue
+        // column reads as the change in revenue, but this is the change in
+        // revenue PER SELLING DAY -- a month with three more working days can
+        // show more revenue and a negative figure here, and that looked like
+        // a bug until the column said which one it was.
+        { key: "pct_change_per_selling_day", label: "เปลี่ยนแปลง (ต่อวันขาย)", num: true, render: r => signed(r.pct_change_per_selling_day) },
       ], k, { scroll: false })}</div>`;
 
   chart(el.querySelector("#c1"), {
     data: {
-      labels: k.map(r => r.month),
+      labels: k.map(r => monthTH(r.month)),
       datasets: [
         { type: "bar", label: "รายได้", data: k.map(r => r.revenue_ex_vat), backgroundColor: "#a8c7fa", yAxisID: "y" },
         { type: "line", label: "ต่อวันขาย", data: k.map(r => r.revenue_per_selling_day), borderColor: "#b42318", backgroundColor: "#b42318", yAxisID: "y1", tension: .25 },
@@ -201,54 +291,121 @@ P.overview = async (el) => {
     options: {
       maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
       scales: {
-        y: { position: "left", ticks: { callback: v => (v / 1e6).toFixed(1) + "M" } },
-        y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { callback: v => (v / 1e3).toFixed(0) + "K" } },
+        y: { position: "left", beginAtZero: true, min: 0, ticks: { callback: v => (v / 1e6).toFixed(1) + "M" } },
+        // Both axes start at 0. Chart.js otherwise fits the right-hand axis to
+        // the data range, so a per-selling-day line that moves 5% drew as a
+        // cliff against a bar axis that did start at 0 -- two series on one
+        // chart with different baselines, read as one picture.
+        y1: { position: "right", beginAtZero: true, min: 0, grid: { drawOnChartArea: false }, ticks: { callback: v => (v / 1e3).toFixed(0) + "K" } },
       },
     },
   });
 };
 
+// rows x columns from a long payload, plus a row total and a column total.
+// Returns pre-escaped HTML: a pivot has a different column set per dataset,
+// so it cannot go through `table()` without building the column objects
+// dynamically, and doing it here keeps the sum in one place.
+function pivot(rows, rowKey, colKey, valKey, opts = {}) {
+  const cols = opts.cols || [...new Set(rows.map(r => r[colKey]))].sort();
+  const cell = {};
+  const rowTotal = {}, colTotal = {};
+  let grand = 0;
+  for (const r of rows) {
+    const a = r[rowKey], b = r[colKey], v = Number(r[valKey]) || 0;
+    (cell[a] ||= {})[b] = (cell[a][b] || 0) + v;
+    rowTotal[a] = (rowTotal[a] || 0) + v;
+    colTotal[b] = (colTotal[b] || 0) + v;
+    grand += v;
+  }
+  // Biggest first: with five reps and nine months the useful question is who
+  // is where, and alphabetical order by code answers a different one.
+  const names = Object.keys(cell).sort((a, b) => rowTotal[b] - rowTotal[a]);
+  const head = `<th>${esc(opts.rowLabel || "")}</th>` +
+    cols.map(c => `<th class="num">${opts.colFmt ? opts.colFmt(c) : esc(c)}</th>`).join("") +
+    `<th class="num">รวม</th>`;
+  const body = names.map(n =>
+    `<tr><td>${esc(n)}</td>` +
+    cols.map(c => `<td class="num">${cell[n][c] ? baht(cell[n][c]) : '<span class="muted">–</span>'}</td>`).join("") +
+    `<td class="num"><strong>${baht(rowTotal[n])}</strong></td></tr>`).join("");
+  // The column total row is the check that makes the pivot readable as
+  // evidence: it must re-add to the same figure the overview card shows.
+  const foot = `<tr><td><strong>รวม</strong></td>` +
+    cols.map(c => `<td class="num"><strong>${baht(colTotal[c] || 0)}</strong></td>`).join("") +
+    `<td class="num"><strong>${baht(grand)}</strong></td></tr>`;
+  return `<div class="scroll"><table>
+    <thead><tr>${head}</tr></thead><tbody>${body}</tbody>
+    <tfoot>${foot}</tfoot></table></div>`;
+}
+
 P.sales = async (el) => {
   const d = await api("/api/sales");
   const g = d.by_group_month, p = d.by_person_month;
+  const pc = d.by_person_category || [];
   const months = [...new Set(g.map(r => r.month))].sort();
   const byGroup = {};
   g.forEach(r => { (byGroup[r.group_name] ||= {})[r.month] = r.revenue_ex_vat; });
   const totals = Object.entries(byGroup)
-    .map(([name, m]) => ({ name, total: Object.values(m).sum ? 0 : Object.values(m).reduce((a, b) => a + (b || 0), 0), m }))
+    .map(([name, m]) => ({ name, total: Object.values(m).reduce((a, b) => a + (b || 0), 0), m }))
     .sort((a, b) => b.total - a.total);
+  const grand = totals.reduce((a, b) => a + b.total, 0);
   const palette = ["#1f6feb", "#1a7f37", "#9a6700", "#b42318", "#6f42c1", "#0a7ea4", "#d1671f", "#6b7889"];
+
+  // The chart drew the top 8 groups only, so a stacked bar was short of the
+  // month's real revenue by whatever the remaining groups sold -- the reader
+  // has no way to see that the bar is a subset. Everything past the 8th is
+  // summed into one grey "อื่นๆ" band so the bar height IS the month total.
+  const top = totals.slice(0, 8);
+  const rest = totals.slice(8);
+  const series = top.map((t, i) => ({
+    label: t.name, data: months.map(m => t.m[m] || 0),
+    backgroundColor: palette[i % palette.length],
+  }));
+  if (rest.length) {
+    series.push({
+      label: `อื่นๆ (${rest.length} กลุ่ม)`,
+      data: months.map(m => rest.reduce((a, t) => a + (t.m[m] || 0), 0)),
+      backgroundColor: "#c9ced6",
+    });
+  }
 
   el.innerHTML = `
     ${scopeBanner(d.scope)}
     <div class="panel"><h3>รายได้ตามกลุ่มสินค้า</h3>
-      <p class="hint">แสดง 8 กลุ่มที่มีรายได้สูงสุด</p>
+      <p class="hint">${rest.length
+        ? `แสดง 8 กลุ่มที่มีรายได้สูงสุด ส่วนที่เหลือรวมเป็น «อื่นๆ» — ความสูงของแท่งจึงเท่ากับรายได้รวมของเดือนนั้น`
+        : `ทุกกลุ่มสินค้า — ความสูงของแท่งเท่ากับรายได้รวมของเดือนนั้น`}</p>
       <div class="chart-wrap"><canvas id="c2"></canvas></div></div>
     <div class="panel"><h3>สรุปตามกลุ่มสินค้า</h3>
       ${table([
         { key: "name", label: "กลุ่มสินค้า" },
         { key: "total", label: "รายได้รวม", num: true, render: r => baht(r.total) },
-        { key: "share", label: "สัดส่วน", num: true, render: r => nf(r.total / totals.reduce((a, b) => a + b.total, 0) * 100, 1) + "%" },
+        { key: "share", label: "สัดส่วน", num: true, render: r => nf(r.total / grand * 100, 1) + "%" },
       ], totals)}</div>
-    <div class="panel"><h3>พนักงานขาย</h3>
+    <div class="panel"><h3>พนักงานขาย × เดือน</h3>
+      <p class="hint">รายได้ไม่รวม VAT · แถวเรียงจากยอดรวมมากไปน้อย
+        แถวล่างสุดคือยอดรวมของทุกคนในเดือนนั้น</p>
+      ${pivot(p, "salesperson_code", "month", "revenue_ex_vat",
+              { cols: months, rowLabel: "รหัสพนักงานขาย", colFmt: monthTH })}</div>
+    <div class="panel"><h3>พนักงานขาย × หมวดสินค้า</h3>
+      <p class="hint">ใครขายอะไร — รายได้ไม่รวม VAT ตลอดช่วงข้อมูล</p>
+      ${pc.length ? pivot(pc, "salesperson_code", "category", "revenue_ex_vat",
+                          { rowLabel: "รหัสพนักงานขาย" })
+                  : `<p class="hint">ไม่มีข้อมูล</p>`}</div>
+    <div class="panel"><h3>พนักงานขายรายเดือน (รายละเอียด)</h3>
       ${table([
         { key: "salesperson_code", label: "รหัส" },
-        { key: "month", label: "เดือน" },
+        { key: "month", label: "เดือน", render: r => monthTH(r.month) },
         { key: "revenue_ex_vat", label: "รายได้", num: true, render: r => baht(r.revenue_ex_vat) },
         { key: "n_documents", label: "เอกสาร", num: true, render: r => nf(r.n_documents) },
       ], p)}</div>`;
 
   chart(el.querySelector("#c2"), {
     type: "bar",
-    data: {
-      labels: months,
-      datasets: totals.slice(0, 8).map((t, i) => ({
-        label: t.name, data: months.map(m => t.m[m] || 0), backgroundColor: palette[i % palette.length],
-      })),
-    },
+    data: { labels: months.map(monthTH), datasets: series },
     options: {
       maintainAspectRatio: false,
-      scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => (v / 1e6).toFixed(1) + "M" } } },
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { callback: v => (v / 1e6).toFixed(1) + "M" } } },
     },
   });
 };
@@ -274,7 +431,7 @@ P.demand = async (el) => {
     chart(el.querySelector("#c3"), {
       type: "line",
       data: {
-        labels: rows.map(r => r.week_start),
+        labels: rows.map(r => dateTH(r.week_start)),
         datasets: [{ label: name, data: rows.map(r => r.qty), borderColor: "#1f6feb", backgroundColor: "#dbe8ff", fill: true, tension: .2 }],
       },
       options: { maintainAspectRatio: false, plugins: { legend: { display: false } } },
@@ -284,17 +441,33 @@ P.demand = async (el) => {
   draw(sel);
 };
 
+const isTrue = (v) => v === true || v === "true";
+
 P.forecast = async (el) => {
   const d = await api("/api/forecast");
   const f = d.next_4_weeks, a = d.trend_alerts;
-  const flagged = a.filter(r => r.alert === true || r.alert === "true");
+  const flagged = a.filter(r => isTrue(r.alert));
+  // Groups whose whole 10-90 band sits UNDER the point forecast. That is the
+  // backtest saying this model has overshot every time it was tested here, so
+  // the point figure is the wrong number to order from -- the low end is.
+  // Pulled from the payload, not hardcoded: it is recomputed on every upload
+  // and a list of group codes frozen into the page would go stale silently.
+  const overs = f.filter(r => isTrue(r.range_below_forecast) && !isStopped(r));
+  const overNote = overs.length
+    ? `<div class="banner">${overs.length} กลุ่ม (${overs.map(r => esc(r.sku_prefix)).join(", ")})
+        มีช่วงค่าทั้งช่วงต่ำกว่าค่าพยากรณ์ — แปลว่าในการทดสอบย้อนหลัง
+        โมเดลพยากรณ์สูงเกินจริงเกือบทุกครั้ง ให้ยึด «ต่ำสุด» เป็นหลัก</div>`
+    : "";
+
   el.innerHTML = `
     ${scopeBanner(d.scope)}
     <div class="banner">กลุ่มสินค้าที่ขายไม่สม่ำเสมอ (intermittent) แสดงเป็นค่าประมาณเท่านั้น
       ไม่ควรใช้สั่งซื้อโดยตรง — ให้ใช้จุดสั่งซื้อในหน้า «สต็อก» แทน</div>
+    ${overNote}
     <div class="panel"><h3>พยากรณ์ 4 สัปดาห์ข้างหน้า</h3>
-      <p class="hint">ช่วงค่าคือเปอร์เซ็นไทล์ที่ 10–90 ของอัตราส่วนจริง/พยากรณ์จากการทดสอบย้อนหลัง
-        เครื่องหมาย – หมายถึงข้อมูลไม่พอที่จะให้ช่วงที่เชื่อถือได้</p>
+      <p class="hint">ช่วงที่ยอดจริงน่าจะอยู่ (จากผลทดสอบย้อนหลัง)
+        เครื่องหมาย – หมายถึงข้อมูลไม่พอที่จะให้ช่วงที่เชื่อถือได้<br>
+        แม่นยำ ~14% ช่วงปกติ / ~22% ช่วงยอดเปลี่ยนระดับ</p>
       ${table([
         { key: "sku_prefix", label: "รหัส" },
         { key: "group_name", label: "กลุ่มสินค้า" },
@@ -305,21 +478,35 @@ P.forecast = async (el) => {
         {
           key: "is_intermittent", label: "สถานะ", render: r =>
             isStopped(r) ? `<span class="pill bad">หยุดขาย</span>`
-              : (r.is_intermittent === true || r.is_intermittent === "true")
+              : isTrue(r.range_below_forecast)
+              ? `<span class="pill warn">โมเดลมักพยากรณ์สูงเกิน — ควรอ้างอิงค่าต่ำ</span>`
+              : isTrue(r.is_intermittent)
               ? `<span class="pill warn">ไม่สม่ำเสมอ</span>` : `<span class="pill good">ใช้สั่งซื้อได้</span>`
         },
       ], f)}</div>
     <div class="panel"><h3>สัญญาณเตือนแนวโน้ม (${flagged.length} จาก ${a.length} กลุ่ม)</h3>
       <p class="hint">เปรียบเทียบค่ามัธยฐานของ 4 สัปดาห์ล่าสุดกับ 8 สัปดาห์ล่าสุด
-        ใช้มัธยฐานเพื่อไม่ให้ออร์เดอร์ใหญ่เพียงรายการเดียวมีอิทธิพลเกินจริง</p>
+        ใช้มัธยฐานเพื่อไม่ให้ออร์เดอร์ใหญ่เพียงรายการเดียวมีอิทธิพลเกินจริง<br>
+        กลุ่มที่ขายไม่สม่ำเสมอจะแสดงเพียง «ยังขาย / หยุดขาย» เท่านั้น</p>
       ${table([
         { key: "sku_prefix", label: "รหัส" },
         { key: "group_name", label: "กลุ่มสินค้า" },
-        { key: "pct_change_median", label: "มัธยฐาน", num: true, render: r => (r.stopped === true || r.stopped === "true") ? `<span class="pill bad">หยุดขาย</span>` : signed(r.pct_change_median) },
-        { key: "pct_change_mean", label: "ค่าเฉลี่ย", num: true, render: r => signed(r.pct_change_mean) },
+        // An intermittent group sells in a handful of weeks out of eight, so
+        // its "median of the last 4 weeks" is routinely a median of zeros and
+        // the percentage is +/-100% or nothing at all. Printing that number
+        // invites somebody to act on it. The only honest thing these three
+        // groups support is whether they are still selling, so that is all
+        // they are given -- the same reasoning as the หยุดขาย suppression.
+        { key: "pct_change_median", label: "มัธยฐาน", num: true, render: r => noTrend(r) ? MUTED : signed(r.pct_change_median) },
+        { key: "pct_change_mean", label: "ค่าเฉลี่ย", num: true, render: r => noTrend(r) ? MUTED : signed(r.pct_change_mean) },
         {
           key: "direction", label: "ทิศทาง", render: r => {
-            if (r.outlier_driven === true || r.outlier_driven === "true")
+            // หยุดขาย wins over ยังขาย: 05 is both, and "still selling" on
+            // something that has not sold for a month is the worse of the two
+            // wrong answers.
+            if (isStopped(r)) return `<span class="pill bad">หยุดขาย</span>`;
+            if (isTrue(r.is_intermittent)) return `<span class="pill flat">ยังขาย</span>`;
+            if (isTrue(r.outlier_driven))
               return `<span class="pill flat" title="ค่าเฉลี่ยเปลี่ยนแต่มัธยฐานไม่เปลี่ยน = ออร์เดอร์ใหญ่รายการเดียว">ออร์เดอร์ใหญ่</span>`;
             const m = { rising: ["good", "เพิ่มขึ้น"], falling: ["bad", "ลดลง"], stable: ["flat", "คงที่"] }[r.direction] || ["flat", r.direction];
             return `<span class="pill ${m[0]}">${esc(m[1])}</span>`;
@@ -328,9 +515,34 @@ P.forecast = async (el) => {
       ], a.slice().sort((x, y) => (y.alert === true) - (x.alert === true)))}</div>`;
 };
 
+const MUTED = '<span class="muted">–</span>';
+// An intermittent group sells in a handful of weeks out of eight, so its
+// "median of the last 4 weeks" is routinely a median of zeros and the
+// percentage comes out +/-100% or nothing at all. Printing that number invites
+// somebody to act on it. The only thing these groups honestly support is
+// whether they are still selling, so that is all they are given -- the same
+// reasoning as the หยุดขาย suppression on the forecast figures.
+const noTrend = (r) => isStopped(r) || isTrue(r.is_intermittent);
+
+// The pipeline picks between two windows per group. "full active window" and
+// "last 8 weeks" are the column values; they were printed raw at an operator
+// who does not read English, next to a number they are meant to order from.
+const BASIS_TH = {
+  "full active window": "ทั้งช่วงที่ยังขายอยู่",
+  "last 8 weeks": "8 สัปดาห์ล่าสุด",
+};
+
 P.stock = async (el) => {
   const d = await api("/api/stock");
-  const rp = d.reorder_points, sc = d.stock_check;
+  const rp = d.reorder_points;
+  // Default order was days-since-last-sale, which puts a part that sold 300
+  // baht two years ago above one that sold 2m last quarter. Whoever opens this
+  // page has limited time to go and look at things; lifetime revenue is the
+  // order that spends it best. Sorted here rather than server-side so the
+  // company-wide endpoint keeps serving one ordering to everybody.
+  const sc = (d.stock_check || []).slice()
+    .sort((a, b) => (Number(b.total_revenue_ex_vat) || 0)
+                  - (Number(a.total_revenue_ex_vat) || 0));
   const risk = sc.filter(r => r.risk_level === "risk").length;
   const watch = sc.filter(r => r.risk_level === "watch").length;
   el.innerHTML = `
@@ -344,22 +556,26 @@ P.stock = async (el) => {
       รายการด้านล่างคือสินค้าที่<strong>ไม่มีการขาย</strong>มานาน ซึ่งอาจเป็นของค้างสต็อก
       หรืออาจเป็นเพราะของหมดจึงขายไม่ได้ — จึงควร<strong>ไปตรวจสอบ</strong> ไม่ใช่ตัดขายทิ้งทันที</div>
     <div class="panel"><h3>จุดสั่งซื้อ (Reorder point)</h3>
-      <p class="hint">ROP = ความต้องการเฉลี่ยช่วงรอของ + ส่วนเผื่อความปลอดภัย (ระดับบริการ 95%)</p>
+      <p class="hint">ROP = ความต้องการเฉลี่ยช่วงรอของ + ส่วนเผื่อความปลอดภัย (ระดับบริการ 95%)<br>
+        <strong>เมื่อสต็อกในโกดังเหลือต่ำกว่าจุดสั่งซื้อ ให้สั่งเพิ่ม</strong></p>
       ${table([
         { key: "sku_prefix", label: "รหัส" },
         { key: "group_name", label: "กลุ่มสินค้า" },
         { key: "unit", label: "หน่วย" },
         { key: "mean_weekly_qty", label: "เฉลี่ย/สัปดาห์", num: true, render: r => nf(r.mean_weekly_qty, 1) },
         { key: "reorder_point", label: "จุดสั่งซื้อ", num: true, render: r => stopped(r, x => `<strong>${nf(x.reorder_point)}</strong>`) },
-        { key: "basis_window", label: "ฐานคำนวณ" },
+        { key: "basis_window", label: "ฐานคำนวณ", render: r => esc(BASIS_TH[r.basis_window] || r.basis_window) },
       ], rp, { scroll: false })}</div>
     <div class="panel"><h3>สินค้าที่ควรตรวจสอบ</h3>
+      <p class="hint">เรียงตามรายได้สะสมมากไปน้อย — รายการบนสุดคือของที่เคยทำเงินให้มากที่สุด
+        จึงคุ้มที่จะไปดูก่อน</p>
       ${table([
         { key: "sku", label: "รหัสสินค้า" },
         { key: "product_name", label: "ชื่อสินค้า" },
         { key: "days_since_last_sale", label: "วันที่ไม่ขาย", num: true },
-        { key: "last_sale_date", label: "ขายล่าสุด" },
+        { key: "last_sale_date", label: "ขายล่าสุด", render: r => dateTH(r.last_sale_date) },
         { key: "total_qty_sold", label: "ขายสะสม", num: true, render: r => nf(r.total_qty_sold) },
+        { key: "unit", label: "หน่วย" },
         { key: "total_revenue_ex_vat", label: "รายได้สะสม", num: true, render: r => baht(r.total_revenue_ex_vat) },
         {
           key: "risk_level", label: "ระดับ", render: r =>
@@ -368,9 +584,41 @@ P.stock = async (el) => {
       ], sc)}</div>`;
 };
 
+// "earlier"/"recent" and "ma8"/"naive" were printed raw. Nobody outside this
+// repo knows that "recent" is the window where sales stepped down, which is
+// the single fact that explains why the second number is worse.
+const SCEN_TH = { earlier: "ช่วงปกติ", recent: "ช่วงยอดเปลี่ยนระดับ" };
+const MODEL_TH = {
+  ma8: "ค่าเฉลี่ย 8 สัปดาห์ (ที่ใช้จริง)",
+  ma4: "ค่าเฉลี่ย 4 สัปดาห์",
+  naive: "ใช้สัปดาห์ล่าสุดซ้ำ",
+  "ses_a0.3": "ถ่วงน้ำหนักแบบลดหลั่น",
+};
+const scenTH = (s) => SCEN_TH[s] || esc(s);
+const modelTH = (m) => MODEL_TH[m] || esc(m);
+
+// Target band. No annotation plugin is loaded -- the page takes Chart.js from
+// a CDN with no build step -- so this draws the rectangle itself, underneath
+// the bars, which is all the plugin would have done.
+const BAND_LO = 10, BAND_HI = 15;
+const bandPlugin = {
+  id: "targetBand",
+  beforeDatasetsDraw(c) {
+    const { ctx, chartArea: area, scales: { y } } = c;
+    if (!y) return;
+    const top = y.getPixelForValue(BAND_HI), bottom = y.getPixelForValue(BAND_LO);
+    ctx.save();
+    ctx.fillStyle = "rgba(26,127,55,.10)";
+    ctx.fillRect(area.left, top, area.right - area.left, bottom - top);
+    ctx.strokeStyle = "rgba(26,127,55,.45)";
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(area.left, top, area.right - area.left, bottom - top);
+    ctx.restore();
+  },
+};
+
 P.accuracy = async (el) => {
   const d = await api("/api/accuracy");
-  const m = d.model_accuracy;
   // Pooled figures come from the API. They are NOT the mean of the per-group
   // WAPEs below: WAPE is a ratio of sums, so averaging the percentages gives
   // a group selling 68 units the same weight as one selling 90,000 and put
@@ -378,41 +626,75 @@ P.accuracy = async (el) => {
   const pooled = d.pooled || [];
   const scen = [...new Set(pooled.map(r => r.scenario))];
   const models = [...new Set(pooled.map(r => r.model))];
+  const wape = (s) => pooled.find(p => p.scenario === s && p.model === "ma8")?.wape_4wk_total;
+
+  // The headline in one sentence, from the payload. This page used to open
+  // with a chart of four models across two scenarios and leave the reader to
+  // work out which number was theirs; only ma8 is in production, so that is
+  // the number the sentence quotes.
+  const e = wape("earlier"), rc = wape("recent");
+  const summary = (e == null || rc == null) ? ""
+    // One decimal, not zero. The recent figure is 22.5%, which rounds to 23%
+    // and then contradicts the "~22%" printed on the forecast page -- two
+    // screens quoting the same backtest at different numbers.
+    : `<div class="msg info">โดยรวมแล้วโมเดลที่ใช้จริงพยากรณ์ยอด 4 สัปดาห์
+        <b>คลาดเคลื่อนประมาณ ${nf(e, 1)}%</b> ในช่วงปกติ
+        และ <b>${nf(rc, 1)}%</b> ในช่วงที่ยอดขายเปลี่ยนระดับ
+        — เป้าหมายที่ยอมรับได้คือ ${BAND_LO}–${BAND_HI}%</div>`;
+
+  // One row per group, both periods side by side, ma8 only. The old table was
+  // 4 models x 2 scenarios x 15 groups = 120 rows of which 30 mattered, and
+  // the reader had to scan for the pair that could be compared.
+  const ma8 = (d.model_accuracy || []).filter(r => r.model === "ma8");
+  const byGroup = {};
+  for (const r of ma8) {
+    const g = (byGroup[r.sku_prefix] ||= {
+      sku_prefix: r.sku_prefix, group_name: r.group_name });
+    g[r.scenario] = r.wape_4wk_total;
+  }
+  const inBand = (v) => v == null ? MUTED
+    : `<span class="pill ${v <= BAND_HI ? "good" : v <= 25 ? "warn" : "bad"}">${nf(v, 1)}%</span>`;
+  const rows = Object.values(byGroup)
+    .sort((a, b) => (a.recent ?? 999) - (b.recent ?? 999));
+
   el.innerHTML = `
     ${scopeBanner(d.scope)}
+    ${summary}
     <div class="panel"><h3>ความแม่นยำของโมเดล (WAPE ยอดรวม 4 สัปดาห์)</h3>
-      <p class="hint">ยิ่งต่ำยิ่งดี · «earlier» คือช่วงปกติ «recent» คือช่วงที่ยอดขายกำลังลดลง
+      <p class="hint">ยิ่งต่ำยิ่งดี · «ช่วงปกติ» คือช่วงที่ยอดขายทรงตัว
+        «ช่วงยอดเปลี่ยนระดับ» คือช่วงที่ยอดขายกำลังลดลง
         ค่าที่สูงขึ้นในช่วงหลังสะท้อนการเปลี่ยนระดับของยอดขาย ไม่ใช่ความผันผวนรายสัปดาห์
-        ค่านี้ถ่วงน้ำหนักตามปริมาณขายของแต่ละกลุ่ม</p>
+        ค่านี้ถ่วงน้ำหนักตามปริมาณขายของแต่ละกลุ่ม · แถบเขียวคือเป้าหมาย ${BAND_LO}–${BAND_HI}%</p>
       <div class="chart-wrap"><canvas id="c4"></canvas></div>
       ${table([
-        { key: "scenario", label: "ช่วงทดสอบ" },
-        { key: "model", label: "โมเดล" },
-        { key: "wape_4wk_total", label: "WAPE 4 สัปดาห์", num: true, render: r => nf(r.wape_4wk_total, 1) + "%" },
-        { key: "wape_weekly", label: "WAPE รายสัปดาห์", num: true, render: r => nf(r.wape_weekly, 1) + "%" },
+        { key: "scenario", label: "ช่วงทดสอบ", render: r => scenTH(r.scenario) },
+        { key: "model", label: "โมเดล", render: r => modelTH(r.model) },
+        { key: "wape_4wk_total", label: "คลาดเคลื่อน 4 สัปดาห์", num: true, render: r => nf(r.wape_4wk_total, 1) + "%" },
+        { key: "wape_weekly", label: "คลาดเคลื่อนรายสัปดาห์", num: true, render: r => nf(r.wape_weekly, 1) + "%" },
         { key: "n_groups", label: "กลุ่ม", num: true },
       ], pooled, { scroll: false })}</div>
-    <div class="panel"><h3>รายละเอียดรายกลุ่ม</h3>
-      <p class="hint">อย่านำค่าเหล่านี้มาเฉลี่ยกันเพื่อหาค่ารวม — ใช้ตารางด้านบนแทน</p>
+    <div class="panel"><h3>รายกลุ่มสินค้า (เฉพาะโมเดลที่ใช้จริง)</h3>
+      <p class="hint">อย่านำค่าเหล่านี้มาเฉลี่ยกันเพื่อหาค่ารวม — ใช้ตารางด้านบนแทน
+        เรียงจากกลุ่มที่แม่นที่สุดในช่วงยอดเปลี่ยนระดับ</p>
       ${table([
-        { key: "scenario", label: "ช่วงทดสอบ" },
-        { key: "model", label: "โมเดล" },
         { key: "sku_prefix", label: "รหัส" },
         { key: "group_name", label: "กลุ่มสินค้า" },
-        { key: "wape_4wk_total", label: "WAPE 4 สัปดาห์", num: true, render: r => r.wape_4wk_total == null ? "–" : nf(r.wape_4wk_total, 1) + "%" },
-      ], m)}</div>`;
+        { key: "earlier", label: "ช่วงปกติ", num: true, render: r => inBand(r.earlier) },
+        { key: "recent", label: "ช่วงยอดเปลี่ยนระดับ", num: true, render: r => inBand(r.recent) },
+      ], rows, { scroll: false })}</div>`;
 
   chart(el.querySelector("#c4"), {
     type: "bar",
+    plugins: [bandPlugin],
     data: {
-      labels: models,
+      labels: models.map(modelTH),
       datasets: scen.map((s, i) => ({
-        label: s,
+        label: scenTH(s),
         data: models.map(mo => { const f = pooled.find(p => p.scenario === s && p.model === mo); return f ? f.wape_4wk_total : null; }),
         backgroundColor: i === 0 ? "#1f6feb" : "#d1671f",
       })),
     },
-    options: { maintainAspectRatio: false, scales: { y: { ticks: { callback: v => v + "%" } } } },
+    options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { callback: v => v + "%" } } } },
   });
 };
 
@@ -420,8 +702,30 @@ P.customers = async (el) => {
   const d = await api("/api/customers?limit=300");
   const seg = d.segments, top = d.top_customers;
   const totalRev = seg.reduce((a, b) => a + (b.revenue || 0), 0);
+
+  // "Cannot Lose" = bought a lot and often, and has now gone quiet. That is
+  // the one segment where a phone call has a clear job, so it gets lifted out
+  // of the 300-row table into a list somebody can work through.
+  //
+  // Filtered from top_customers, which for a rep is already their own book
+  // scoped server-side -- so a rep is handed their own customers to call and
+  // never learns that a colleague's customer went quiet.
+  const callList = top.filter(r => r.segment === "Cannot Lose")
+    .slice().sort((a, b) => (Number(b.monetary) || 0) - (Number(a.monetary) || 0));
+
   el.innerHTML = `
     ${scopeBanner(d.scope)}
+    ${callList.length ? `<div class="panel"><h3>ลูกค้าที่ควรติดต่อ</h3>
+      <p class="hint">ลูกค้ากลุ่ม «ต้องรักษาไว้» — เคยซื้อมากและซื้อบ่อย แต่หายไปนาน
+        เรียงตามรายได้สะสมมากไปน้อย · นับจำนวนวันจากวันสุดท้ายในไฟล์ ไม่ใช่วันนี้</p>
+      ${table([
+        { key: "customer_code", label: "รหัส" },
+        { key: "customer_name", label: "ชื่อลูกค้า" },
+        { key: "monetary", label: "รายได้สะสม", num: true, render: r => baht(r.monetary) },
+        { key: "frequency", label: "เคยซื้อ (ครั้ง)", num: true },
+        { key: "recency_days", label: "หายไปแล้ว (วัน)", num: true, render: r => `<strong>${nf(r.recency_days)}</strong>` },
+        { key: "last_purchase", label: "ซื้อล่าสุด", render: r => dateTH(r.last_purchase) },
+      ], callList, { scroll: true })}</div>` : ""}
     <div class="panel"><h3>การจัดกลุ่มลูกค้า (RFM)</h3>
       <p class="hint">R = ซื้อล่าสุดเมื่อไร · F = ซื้อบ่อยแค่ไหน · M = ใช้จ่ายเท่าไร
         คะแนนเป็นควินไทล์ตามลำดับ (แต่ละช่วงมีลูกค้าราว 20%)

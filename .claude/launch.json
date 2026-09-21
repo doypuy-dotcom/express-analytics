@@ -12,6 +12,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["scripts/run_local_api.py"],
       "port": 8099
+    },
+    {
+      "name": "preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8097", "--directory", ".tmp/preview"],
+      "port": 8097
     }
   ]
 }

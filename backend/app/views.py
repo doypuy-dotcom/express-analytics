@@ -25,9 +25,12 @@ split is deliberate:
 So a salesperson's "revenue per selling day" is computed by the same line of
 code as the ceo's. Nothing in this file decides what a metric means.
 
-The ceo does not come through this module at all: the ceo reads the
-pre-aggregated tables directly, which is the exact path that produces the
-accepted 44,493,479.89.
+For six of the seven views the ceo does not come through this module at all:
+the ceo reads the pre-aggregated tables directly, which is the exact path
+that produces the accepted 44,493,479.89. The exception is
+`by_person_category`, which has no pre-aggregated table to read -- rather
+than build a second implementation of the same sum for one role, that one
+function serves both and switches the WHERE clause. See its docstring.
 """
 
 from __future__ import annotations
@@ -199,6 +202,78 @@ def by_person_month(scope: Scope) -> list[dict]:
     out["n_documents"] = out["n_documents"].fillna(0).astype(int)
     return _records(out.sort_values(["month", "revenue_ex_vat"],
                                     ascending=[True, False]))
+
+
+def by_person_category(scope: Scope) -> list[dict]:
+    """Revenue per salesperson per product category.
+
+    The only view here that also serves the ceo. Every other page has a
+    pre-aggregated company table to read, so the ceo never reaches this
+    module; there is no sales_by_person_category table, and writing one would
+    mean the same sum existing twice -- once in the pipeline for the ceo and
+    once here for everyone else. Two implementations of one metric is what
+    this module exists to avoid, so the scope switch is a WHERE clause, not a
+    second function.
+
+    The ceo branch buckets a missing salesperson_code under the pipeline's
+    UNASSIGNED_SALESPERSON, exactly as the company by-person table does --
+    imported rather than retyped, because a literal here would put the same
+    label in two places and this page shows both pivots side by side. Those
+    are 30 live line items worth 33,503.50, and dropping them would make this
+    page disagree with the accepted 44,493,479.89 by that amount. A scoped
+    user is filtered to a list of real codes, so no null can be in range and
+    no bucket appears.
+    """
+    import export_app
+    unrestricted = scope.unrestricted
+    codes = scope.codes or []
+    if not unrestricted and not codes:
+        return []
+
+    unassigned = export_app.UNASSIGNED_SALESPERSON
+    cols = ["salesperson_code", "category", "revenue_ex_vat", "n_invoices"]
+    if not _use_db():
+        ln = pd.read_csv(CLEAN / "sales_lines.csv", dtype=CODE_DTYPES)
+        ln = ln[~ln["is_cancelled"].fillna(False)]
+        if not unrestricted:
+            ln = ln[ln["salesperson_code"].isin(codes)]
+        if ln.empty:
+            return []
+        ln = ln.copy()
+        ln["salesperson_code"] = export_app._fill_salesperson(ln["salesperson_code"])
+        out = (ln.groupby(["salesperson_code", "category"], as_index=False)
+                 .agg(revenue_ex_vat=("amount_ex_vat", "sum"),
+                      n_invoices=("doc_no", "nunique")))
+        out["revenue_ex_vat"] = (out["revenue_ex_vat"].astype(float)
+                                 .fillna(0.0).round(2))
+    else:
+        where = LIVE if unrestricted else f"{MINE} and {LIVE}"
+        # nullif(btrim(...), '') and not a bare coalesce: _fill_salesperson
+        # buckets blanks as well as nulls, and a code of "  " would otherwise
+        # become its own one-row salesperson.
+        #
+        # sum() over a group whose amounts are all NULL is NULL, not 0, and
+        # there is such a group company-wide. A null in a money column reaches
+        # the browser as an empty cell; it is a zero.
+        sql = (f"select coalesce(nullif(btrim(salesperson_code), ''), %s) "
+               f"         as salesperson_code, "
+               f"       category, "
+               f"       round(coalesce(sum(amount_ex_vat), 0)::numeric, 2)::float8 "
+               f"         as revenue_ex_vat, "
+               f"       count(distinct doc_no) as n_invoices "
+               f"from sales_lines where {where} "
+               f"group by 1, 2 order by 3 desc")
+        # Not _frame(): it binds the code list as the only parameter, and this
+        # is the one query in the module with a placeholder ahead of the WHERE
+        # clause. The label must therefore be bound first, in select-list
+        # order, or the code list lands in the label's slot and every row comes
+        # back named after an array.
+        params = (unassigned,) if unrestricted else (unassigned, list(codes))
+        rows = db.fetch(sql, params)
+        out = pd.DataFrame(rows) if rows else pd.DataFrame(columns=cols)
+    if out.empty:
+        return []
+    return _records(out.sort_values("revenue_ex_vat", ascending=False))
 
 
 def weekly_demand(scope: Scope) -> tuple[list[dict], list[dict]]:

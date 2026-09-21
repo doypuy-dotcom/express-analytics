@@ -223,11 +223,14 @@ def sales(scope: Scope = Depends(current_scope)) -> dict:
                                     "sales_by_group_month.csv", order_by="month"),
             "by_person_month": table("sales_by_person_month", APP_DATA,
                                      "sales_by_person_month.csv", order_by="month"),
+            # No pre-aggregated table for this cut; views serves both roles.
+            "by_person_category": views.by_person_category(scope),
             "scope": _scope_note(scope),
         }
     return {
         "by_group_month": views.by_group_month(scope),
         "by_person_month": views.by_person_month(scope),
+        "by_person_category": views.by_person_category(scope),
         "scope": _scope_note(scope),
     }
 

@@ -592,6 +592,30 @@ def test_no_company_figure_on_any_page_the_sales_role_can_reach(client_for):
     _assert_scoped_not_company("customers / revenue per customer",
                                served, scoped, company)
 
+    # --- sales: revenue per salesperson per category --------------------
+    # This cut has no pre-aggregated company table, so views.by_person_category
+    # is the one function in that module the ceo also calls -- the filter is a
+    # WHERE clause chosen at runtime rather than a separate code path. That is
+    # exactly the shape that leaks if the branch is ever inverted, so it is
+    # asserted here with the rest.
+    # Totalled by CATEGORY, deliberately dropping the salesperson code from
+    # the key. If the branch is inverted the payload gains a row per category
+    # per rep, and those sum to the company figure -- which is what the leak
+    # assertion is phrased to catch. Keying on the code instead would report
+    # the same break as "matches neither", a vaguer message for the same bug.
+    # That extra rows appear at all is caught by the sibling test below.
+    served = {}
+    for r in get(c, "/api/sales")["by_person_category"]:
+        served[r["category"]] = (served.get(r["category"], 0.0)
+                                 + float(r["revenue_ex_vat"]))
+    scoped, company = _scoped_and_company(
+        f"select category as k, sum(amount_ex_vat) as v from sales_lines "
+        f"where {live} and salesperson_code = '03' group by 1",
+        f"select category as k, sum(amount_ex_vat) as v from sales_lines "
+        f"where {live} group by 1")
+    _assert_scoped_not_company("sales / revenue per person per category",
+                               served, scoped, company)
+
 
 def test_sales_pages_never_mention_another_salesperson(client_for):
     """4b. No other rep's code appears anywhere in a sales user's payloads."""
