@@ -63,6 +63,17 @@ def _jwks_keys() -> dict:
     return data
 
 
+# Tolerance for clock skew between this host and the Supabase auth server.
+#
+# PyJWT compares iat/nbf/exp against the local clock with zero slack, so a host
+# running a few seconds behind rejects every freshly-minted token with "not yet
+# valid (iat)" -- and the failure is total, silent and baffling: nobody can log
+# in and the token looks fine. Seen on a dev box that was 19s behind. One
+# minute of slack against a one-hour token does not weaken expiry in any way
+# that matters; being unable to sign in at all does.
+_LEEWAY = 60
+
+
 def decode_token(token: str) -> dict:
     secret = os.environ.get("SUPABASE_JWT_SECRET", "").strip()
     opts = {"verify_aud": False}  # Supabase sets aud="authenticated"
@@ -77,7 +88,8 @@ def decode_token(token: str) -> dict:
                 "SUPABASE_JWT_SECRET is not set. Copy it from Supabase: "
                 "Project settings -> API -> JWT Settings -> JWT Secret.",
             )
-        return jwt.decode(token, secret, algorithms=["HS256"], options=opts)
+        return jwt.decode(token, secret, algorithms=["HS256"], options=opts,
+                          leeway=_LEEWAY)
 
     # Asymmetric: find the signing key by kid.
     from jwt import PyJWKClient  # lazy: only needed for RS/ES projects
@@ -85,7 +97,8 @@ def decode_token(token: str) -> dict:
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
     client = PyJWKClient(f"{base}/auth/v1/.well-known/jwks.json")
     key = client.get_signing_key_from_jwt(token).key
-    return jwt.decode(token, key, algorithms=[alg], options=opts)
+    return jwt.decode(token, key, algorithms=[alg], options=opts,
+                      leeway=_LEEWAY)
 
 
 async def current_user(

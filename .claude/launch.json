@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8098", "--directory", "frontend"],
       "port": 8098
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [".tmp/run_api.py"],
+      "port": 8099
     }
   ]
 }
