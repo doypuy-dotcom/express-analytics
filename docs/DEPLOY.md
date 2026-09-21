@@ -92,6 +92,30 @@ curl https://<service>.up.railway.app/health
 
 If `source` says `csv`, `DATABASE_URL` did not reach the process.
 
+### Region — put the API in Singapore, next to the database
+
+Railway defaults new services to US West. Supabase is in `ap-southeast-1`,
+and every page answers from several round trips to Postgres, so a US service
+pays a Pacific crossing on each one. Measured on this project: `/api/demand`
+took **13.7 s** for a salesperson and **21.1 s** for a manager from US West,
+and **0.5 s** from Singapore. Same code, same queries, same database.
+
+The region is **not** settable in `railway.json`. Railway parses a
+`deploy.region` key there and lists it in the resolved config, but it does
+not move the service — the deployment stays where it was, which makes this
+the most misleading way to fail. Scale it explicitly instead:
+
+```bash
+railway service scale --service backend --environment production \
+    southeast-asia=1 sfo=0
+```
+
+Both halves matter. `southeast-asia=1` on its own **adds** a Singapore
+replica and leaves the US one running: two replicas, double the cost, and
+half the requests still crossing the Pacific. `sfo=0` is what makes it a
+move. Confirm with `railway status` — the region line must read
+`Southeast Asia`, and the deployment ID must have changed.
+
 ---
 
 ## 3. Vercel — frontend

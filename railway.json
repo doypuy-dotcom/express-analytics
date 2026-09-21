@@ -3,7 +3,6 @@
   "build": { "builder": "NIXPACKS" },
   "deploy": {
     "startCommand": "uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT",
-    "region": "asia-southeast1",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE"
