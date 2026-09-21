@@ -55,7 +55,6 @@ CLEAN_TO_DB = {
     "deposit_applications.csv": "deposit_applications",
     "products.csv": "products",
     "customers.csv": "customers",
-    "weekly_demand.csv": "weekly_demand",
     "monthly_sales.csv": "monthly_sales",
 }
 CLEAN_EXTRA = {
@@ -63,11 +62,21 @@ CLEAN_EXTRA = {
     "customer_segments.csv": "customer_segments",
 }
 APP_TO_DB = {
+    # weekly_demand belongs HERE, not in CLEAN_TO_DB, even though a file of the
+    # same name exists in data/clean. The clean one is the analyst's panel: it
+    # keeps partial weeks and out-of-scope groups and flags them with columns
+    # the dashboard does not read. Loading that into the table the /api/demand
+    # endpoint serves meant production showed a one-day final week and gap-
+    # ridden series while the local CSV fallback -- which reads data/app --
+    # looked perfect. Two files, one name, opposite contents: the bug was
+    # invisible on this machine by construction. One source now feeds both.
+    "weekly_demand.csv": "weekly_demand",
     "forecast_next_4_weeks.csv": "forecast_next_4_weeks",
     "trend_alerts.csv": "trend_alerts",
     "reorder_points.csv": "reorder_points",
     "stock_check.csv": "stock_check",
     "model_accuracy.csv": "model_accuracy",
+    "model_accuracy_pooled.csv": "model_accuracy_pooled",
     "dim_product_group.csv": "dim_product_group",
     "kpi_monthly.csv": "kpi_monthly",
     "sales_by_group_month.csv": "sales_by_group_month",

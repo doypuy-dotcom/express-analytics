@@ -244,7 +244,19 @@ def stock(user: User = Depends(current_user)) -> dict:
 
 @app.get("/api/accuracy")
 def accuracy(user: User = Depends(current_user)) -> dict:
-    return {"model_accuracy": table("model_accuracy", APP_DATA, "model_accuracy.csv")}
+    """Per-group detail plus the pooled headline.
+
+    The pooled figures are computed in the pipeline, not here and not in the
+    browser. WAPE is a ratio of sums, so pooling it means re-summing the
+    numerator and denominator across groups -- averaging the per-group
+    percentages, which is what the page used to do, reported 50.9% where the
+    real ma8 error is 14.2%.
+    """
+    return {
+        "model_accuracy": table("model_accuracy", APP_DATA, "model_accuracy.csv"),
+        "pooled": table("model_accuracy_pooled", APP_DATA,
+                        "model_accuracy_pooled.csv", order_by="scenario"),
+    }
 
 
 # ----------------------------------------------------------- 7. customers

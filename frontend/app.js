@@ -38,6 +38,18 @@ function signed(v, d = 1) {
   return `<span class="${cls}">${pct(v, d)}</span>`;
 }
 
+// A group that has sold nothing for four weeks still had a forecast and a
+// reorder point printed against it -- group 05 was advertising 251 m to order
+// and a 323 m reorder level months after it stopped moving. Both numbers are
+// arithmetically correct and practically wrong: they are extrapolations of a
+// series that ended. Suppress the number rather than qualify it, so nobody can
+// order from it by reading past the caveat.
+const STOPPED_TH = "หยุดขาย — ไม่แนะนำให้สั่ง";
+const isStopped = (r) => r.stopped === true || r.stopped === "true";
+const stopped = (r, render) => isStopped(r)
+  ? `<span class="pill bad">${STOPPED_TH}</span>`
+  : render(r);
+
 // Charts must be destroyed before their canvas is replaced or Chart.js keeps
 // the old instance alive and the tooltips of two charts fight each other.
 const CHARTS = [];
@@ -251,12 +263,13 @@ P.forecast = async (el) => {
         { key: "sku_prefix", label: "รหัส" },
         { key: "group_name", label: "กลุ่มสินค้า" },
         { key: "unit", label: "หน่วย" },
-        { key: "forecast_qty_4wk", label: "พยากรณ์ 4 สัปดาห์", num: true, render: r => nf(r.forecast_qty_4wk) },
-        { key: "low_qty_4wk", label: "ต่ำสุด", num: true, render: r => nf(r.low_qty_4wk) },
-        { key: "high_qty_4wk", label: "สูงสุด", num: true, render: r => nf(r.high_qty_4wk) },
+        { key: "forecast_qty_4wk", label: "พยากรณ์ 4 สัปดาห์", num: true, render: r => stopped(r, x => nf(x.forecast_qty_4wk)) },
+        { key: "low_qty_4wk", label: "ต่ำสุด", num: true, render: r => isStopped(r) ? `<span class="muted">–</span>` : nf(r.low_qty_4wk) },
+        { key: "high_qty_4wk", label: "สูงสุด", num: true, render: r => isStopped(r) ? `<span class="muted">–</span>` : nf(r.high_qty_4wk) },
         {
           key: "is_intermittent", label: "สถานะ", render: r =>
-            (r.is_intermittent === true || r.is_intermittent === "true")
+            isStopped(r) ? `<span class="pill bad">หยุดขาย</span>`
+              : (r.is_intermittent === true || r.is_intermittent === "true")
               ? `<span class="pill warn">ไม่สม่ำเสมอ</span>` : `<span class="pill good">ใช้สั่งซื้อได้</span>`
         },
       ], f)}</div>
@@ -300,7 +313,7 @@ P.stock = async (el) => {
         { key: "group_name", label: "กลุ่มสินค้า" },
         { key: "unit", label: "หน่วย" },
         { key: "mean_weekly_qty", label: "เฉลี่ย/สัปดาห์", num: true, render: r => nf(r.mean_weekly_qty, 1) },
-        { key: "reorder_point", label: "จุดสั่งซื้อ", num: true, render: r => `<strong>${nf(r.reorder_point)}</strong>` },
+        { key: "reorder_point", label: "จุดสั่งซื้อ", num: true, render: r => stopped(r, x => `<strong>${nf(x.reorder_point)}</strong>`) },
         { key: "basis_window", label: "ฐานคำนวณ" },
       ], rp, { scroll: false })}</div>
     <div class="panel"><h3>สินค้าที่ควรตรวจสอบ</h3>
@@ -310,7 +323,7 @@ P.stock = async (el) => {
         { key: "days_since_last_sale", label: "วันที่ไม่ขาย", num: true },
         { key: "last_sale_date", label: "ขายล่าสุด" },
         { key: "total_qty_sold", label: "ขายสะสม", num: true, render: r => nf(r.total_qty_sold) },
-        { key: "lifetime_revenue", label: "รายได้สะสม", num: true, render: r => baht(r.lifetime_revenue) },
+        { key: "total_revenue_ex_vat", label: "รายได้สะสม", num: true, render: r => baht(r.total_revenue_ex_vat) },
         {
           key: "risk_level", label: "ระดับ", render: r =>
             r.risk_level === "risk" ? `<span class="pill bad">ควรตรวจสอบ</span>` : `<span class="pill warn">เฝ้าระวัง</span>`
@@ -321,25 +334,34 @@ P.stock = async (el) => {
 P.accuracy = async (el) => {
   const d = await api("/api/accuracy");
   const m = d.model_accuracy;
-  const scen = [...new Set(m.map(r => r.scenario))];
-  const models = [...new Set(m.map(r => r.model))];
-  const pooled = [];
-  scen.forEach(s => models.forEach(mo => {
-    const rows = m.filter(r => r.scenario === s && r.model === mo && r.wape_4wk != null);
-    if (rows.length) pooled.push({ scenario: s, model: mo, wape: rows.reduce((a, b) => a + b.wape_4wk, 0) / rows.length, n: rows.length });
-  }));
+  // Pooled figures come from the API. They are NOT the mean of the per-group
+  // WAPEs below: WAPE is a ratio of sums, so averaging the percentages gives
+  // a group selling 68 units the same weight as one selling 90,000 and put
+  // ma8 at 50.9% instead of its real 14.2%.
+  const pooled = d.pooled || [];
+  const scen = [...new Set(pooled.map(r => r.scenario))];
+  const models = [...new Set(pooled.map(r => r.model))];
   el.innerHTML = `
     <div class="panel"><h3>ความแม่นยำของโมเดล (WAPE ยอดรวม 4 สัปดาห์)</h3>
       <p class="hint">ยิ่งต่ำยิ่งดี · «earlier» คือช่วงปกติ «recent» คือช่วงที่ยอดขายกำลังลดลง
-        ค่าที่สูงขึ้นในช่วงหลังสะท้อนการเปลี่ยนระดับของยอดขาย ไม่ใช่ความผันผวนรายสัปดาห์</p>
-      <div class="chart-wrap"><canvas id="c4"></canvas></div></div>
-    <div class="panel"><h3>รายละเอียด</h3>
+        ค่าที่สูงขึ้นในช่วงหลังสะท้อนการเปลี่ยนระดับของยอดขาย ไม่ใช่ความผันผวนรายสัปดาห์
+        ค่านี้ถ่วงน้ำหนักตามปริมาณขายของแต่ละกลุ่ม</p>
+      <div class="chart-wrap"><canvas id="c4"></canvas></div>
+      ${table([
+        { key: "scenario", label: "ช่วงทดสอบ" },
+        { key: "model", label: "โมเดล" },
+        { key: "wape_4wk_total", label: "WAPE 4 สัปดาห์", num: true, render: r => nf(r.wape_4wk_total, 1) + "%" },
+        { key: "wape_weekly", label: "WAPE รายสัปดาห์", num: true, render: r => nf(r.wape_weekly, 1) + "%" },
+        { key: "n_groups", label: "กลุ่ม", num: true },
+      ], pooled, { scroll: false })}</div>
+    <div class="panel"><h3>รายละเอียดรายกลุ่ม</h3>
+      <p class="hint">อย่านำค่าเหล่านี้มาเฉลี่ยกันเพื่อหาค่ารวม — ใช้ตารางด้านบนแทน</p>
       ${table([
         { key: "scenario", label: "ช่วงทดสอบ" },
         { key: "model", label: "โมเดล" },
         { key: "sku_prefix", label: "รหัส" },
         { key: "group_name", label: "กลุ่มสินค้า" },
-        { key: "wape_4wk", label: "WAPE 4 สัปดาห์", num: true, render: r => r.wape_4wk == null ? "–" : nf(r.wape_4wk, 1) + "%" },
+        { key: "wape_4wk_total", label: "WAPE 4 สัปดาห์", num: true, render: r => r.wape_4wk_total == null ? "–" : nf(r.wape_4wk_total, 1) + "%" },
       ], m)}</div>`;
 
   chart(el.querySelector("#c4"), {
@@ -348,7 +370,7 @@ P.accuracy = async (el) => {
       labels: models,
       datasets: scen.map((s, i) => ({
         label: s,
-        data: models.map(mo => { const f = pooled.find(p => p.scenario === s && p.model === mo); return f ? f.wape : null; }),
+        data: models.map(mo => { const f = pooled.find(p => p.scenario === s && p.model === mo); return f ? f.wape_4wk_total : null; }),
         backgroundColor: i === 0 ? "#1f6feb" : "#d1671f",
       })),
     },

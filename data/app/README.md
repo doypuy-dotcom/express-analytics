@@ -30,13 +30,14 @@ ISO `YYYY-MM-DD` date format and `true`/`false` booleans.
 | `dim_product_group.csv` | 19 | shared lookup (all pages) |
 | `kpi_monthly.csv` | 9 | 1. Overview |
 | `sales_by_group_month.csv` | 156 | 1. Overview, 2. Sales |
-| `sales_by_person_month.csv` | 40 | 2. Sales |
-| `weekly_demand.csv` | 456 | 3. Demand |
+| `sales_by_person_month.csv` | 46 | 2. Sales |
+| `weekly_demand.csv` | 516 | 3. Demand |
 | `forecast_next_4_weeks.csv` | 15 | 4. Forecast |
 | `trend_alerts.csv` | 15 | 4. Forecast |
 | `reorder_points.csv` | 3 | 5. Stock |
 | `stock_check.csv` | 210 | 5. Stock |
 | `model_accuracy.csv` | 120 | 6. Accuracy |
+| `model_accuracy_pooled.csv` | 8 | 6. Accuracy |
 
 ### `dim_product_group.csv`
 
@@ -94,25 +95,27 @@ Revenue by month and product group. Additive across groups within a month; n_inv
 ### `sales_by_person_month.csv`
 
 **Page:** 2. Sales  
-**Rows:** 40
+**Rows:** 46
 
-Revenue by month and salesperson.
+Revenue and document count by month and salesperson. Documents with no salesperson code appear under 'ไม่ระบุ'.
+
+> **Caveat.** n_documents is a true distinct document count. Do not compare it with n_invoices in sales_by_group_month.csv, which counts an invoice once per product group it touches.
 
 | Column | Type | Example |
 |---|---|---|
 | `month` | date | 2025-12 |
-| `salesperson_code` | text (code) | 03 |
+| `salesperson_code` | text (code) | 04 |
 | `revenue_ex_vat` | number | 1234567.89 |
-| `n_invoices` | number | 309 |
+| `n_documents` | number | 215 |
 
 ### `weekly_demand.csv`
 
 **Page:** 3. Demand  
-**Rows:** 456
+**Rows:** 516
 
-Weekly quantity history per group, in the group's main unit. Complete weeks only. The series the forecast is built from.
+Weekly quantity history per group, in the group's main unit. Complete weeks only, on a dense axis. The series the forecast is built from.
 
-> **Caveat.** Only each group's main unit is included, so this is demand volume, not a complete line count. Covers 97.1% of revenue.
+> **Caveat.** Weeks with no sales are present as qty 0, so the series is safe to plot directly. Each group starts at its own first sale week rather than at the start of the axis -- zeros before a group existed would be indistinguishable from a group that stopped selling.
 
 | Column | Type | Example |
 |---|---|---|
@@ -121,6 +124,8 @@ Weekly quantity history per group, in the group's main unit. Complete weeks only
 | `group_name` | text | เหล็กซิงค์ (ไม่ทาสี) มอก. |
 | `unit` | text | เมตร |
 | `qty` | number | 2089.63 |
+| `is_complete_week` | boolean | true |
+| `forecast_scope` | boolean | true |
 
 ### `forecast_next_4_weeks.csv`
 
@@ -151,6 +156,7 @@ The order plan: ma8 forecast for the coming 4 weeks with an empirical range. Fil
 | `range_below_forecast` | boolean | true |
 | `is_intermittent` | boolean | false |
 | `confidence` | text | use for ordering |
+| `stopped` | boolean | false |
 
 ### `trend_alerts.csv`
 
@@ -221,6 +227,7 @@ Reorder level for the 3 intermittent groups, where forecasting does not work.
 | `safety_stock` | number | 637.2 |
 | `reorder_point` | number | 1055.0 |
 | `weeks_of_cover` | number | 2.5 |
+| `stopped` | boolean | false |
 
 ### `stock_check.csv`
 
@@ -267,6 +274,24 @@ Backtest WAPE per group and model, for both holdout periods. Evidence for how fa
 | `wape_4wk_total` | number | 9.6 |
 | `bias_4wk` | number | -3.6 |
 | `holdout_qty` | number | 10538.0 |
+
+### `model_accuracy_pooled.csv`
+
+**Page:** 6. Accuracy  
+**Rows:** 8
+
+The same backtest scored once across all groups together -- the headline accuracy figure. ma8 is 14.2% on the earlier holdout and 22.5% on the recent one.
+
+> **Caveat.** Do NOT reproduce these by averaging the per-group WAPEs in model_accuracy.csv. WAPE is a ratio of sums: averaging the percentages weights a group selling 68 units the same as one selling 90,000 and overstates the error by more than three times.
+
+| Column | Type | Example |
+|---|---|---|
+| `scenario` | text | earlier |
+| `model` | text | ses_a0.3 |
+| `wape_weekly` | number | 24.9 |
+| `wape_4wk_total` | number | 11.5 |
+| `holdout_qty` | number | 296836.0 |
+| `n_groups` | number | 15 |
 
 ## Regenerating
 

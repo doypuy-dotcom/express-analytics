@@ -225,6 +225,7 @@ create table if not exists forecast_next_4_weeks (
     "range_below_forecast"             boolean,
     "is_intermittent"                  boolean,
     "confidence"                       text,
+    "stopped"                          boolean,
     primary key ("sku_prefix")
 );
 
@@ -279,6 +280,7 @@ create table if not exists reorder_points (
     "safety_stock"                     double precision,
     "reorder_point"                    double precision,
     "weeks_of_cover"                   double precision,
+    "stopped"                          boolean,
     primary key ("sku_prefix")
 );
 
@@ -329,7 +331,7 @@ create table if not exists sales_by_person_month (
     "month"                            text not null,
     "salesperson_code"                 text not null,
     "revenue_ex_vat"                   double precision,
-    "n_invoices"                       bigint,
+    "n_documents"                      bigint,
     primary key ("month", "salesperson_code")
 );
 
@@ -342,6 +344,16 @@ create table if not exists model_accuracy (
     "wape_4wk_total"                   double precision,
     "bias_4wk"                         double precision,
     "holdout_qty"                      double precision
+);
+
+create table if not exists model_accuracy_pooled (
+    "scenario"                         text not null,
+    "model"                            text not null,
+    "wape_weekly"                      double precision,
+    "wape_4wk_total"                   double precision,
+    "holdout_qty"                      double precision,
+    "n_groups"                         bigint,
+    primary key ("scenario", "model")
 );
 
 create table if not exists dim_product_group (
@@ -413,6 +425,9 @@ create policy sales_by_person_month_read on sales_by_person_month for select to 
 alter table model_accuracy enable row level security;
 drop policy if exists model_accuracy_read on model_accuracy;
 create policy model_accuracy_read on model_accuracy for select to authenticated using (true);
+alter table model_accuracy_pooled enable row level security;
+drop policy if exists model_accuracy_pooled_read on model_accuracy_pooled;
+create policy model_accuracy_pooled_read on model_accuracy_pooled for select to authenticated using (true);
 alter table dim_product_group enable row level security;
 drop policy if exists dim_product_group_read on dim_product_group;
 create policy dim_product_group_read on dim_product_group for select to authenticated using (true);

@@ -33,7 +33,10 @@ TABLES = {
     "customers":            (CLEAN / "customers.csv",           ["customer_name"],          ["customer_code"]),
     "customer_rfm":         (CLEAN / "customer_rfm.csv",        ["customer_code"],          ["segment", "monetary"]),
     "customer_segments":    (CLEAN / "customer_segments.csv",   ["segment"],                []),
-    "weekly_demand":        (CLEAN / "weekly_demand.csv",       ["sku_prefix", "week_start"], []),
+    # data/app, not data/clean. Both directories hold a weekly_demand.csv with
+    # different contents; the dashboard contract is the one that gets served.
+    # See the note in backend/app/ingest.py APP_TO_DB.
+    "weekly_demand":        (APP / "weekly_demand.csv",         ["sku_prefix", "week_start"], []),
     "monthly_sales":        (CLEAN / "monthly_sales.csv",       None,                       []),
     "forecast_next_4_weeks": (APP / "forecast_next_4_weeks.csv", ["sku_prefix"],            []),
     "trend_alerts":         (APP / "trend_alerts.csv",          ["sku_prefix"],             []),
@@ -47,6 +50,7 @@ TABLES = {
     "sales_by_group_month": (APP / "sales_by_group_month.csv",  ["month", "category", "group_name"], ["month"]),
     "sales_by_person_month": (APP / "sales_by_person_month.csv", ["month", "salesperson_code"], []),
     "model_accuracy":       (APP / "model_accuracy.csv",        None,                       []),
+    "model_accuracy_pooled": (APP / "model_accuracy_pooled.csv", ["scenario", "model"],     []),
     "dim_product_group":    (APP / "dim_product_group.csv",     ["sku_prefix"],             []),
 }
 
