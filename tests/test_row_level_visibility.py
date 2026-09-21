@@ -4,7 +4,7 @@ Three test users, three answers to the same question:
 
     sales03@express.local   role sales,          code 03
     manager@express.local   role sales_manager,  team 03 + 04
-    ceo@express.local       role ceo
+    doykong1369@gmail.com   role ceo   <- the owner's real and only ceo login
 
 The totals are not chosen, they are the data:
 
