@@ -182,6 +182,37 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def kpi_from_monthly_aggregates(agg: pd.DataFrame, last_date: str) -> pd.DataFrame:
+    """The derived monthly columns, given the four sums they are derived from.
+
+    Split out from build_kpi_monthly so that the API can do the grouping in
+    SQL -- a role-scoped page that groups in pandas has to drag every line
+    item across the network first, which on a Railway-to-Singapore hop cost
+    30-100 seconds a page. The GROUPING moves; the DEFINITIONS stay here, in
+    one place, so the ceo's "revenue per selling day" and a salesperson's are
+    the same quantity and not two functions that agree today.
+
+    `agg` needs: month, revenue_ex_vat, n_documents, selling_days, n_customers.
+    `last_date` is the last document date in the underlying data, used only to
+    decide whether the final month is partial.
+    """
+    out = agg.sort_values("month").reset_index(drop=True).copy()
+    out["revenue_per_selling_day"] = (
+        out["revenue_ex_vat"] / out["selling_days"]).round(2)
+    out["avg_document_value"] = (
+        out["revenue_ex_vat"] / out["n_documents"]).round(2)
+    out["revenue_ex_vat"] = out["revenue_ex_vat"].round(2)
+    out["pct_change_per_selling_day"] = (
+        out["revenue_per_selling_day"].pct_change() * 100).round(1)
+    # The final month is a partial export, not a real decline. Flag it, because
+    # an unflagged partial month on a dashboard reads as a collapse.
+    last = out["month"].max()
+    d = pd.to_datetime(last_date)
+    partial = d != (d + pd.offsets.MonthEnd(0))
+    out["is_partial_month"] = (out["month"] == last) if partial else False
+    return out
+
+
 def build_kpi_monthly(lines: pd.DataFrame, headers: pd.DataFrame) -> pd.DataFrame:
     """Monthly headline figures, including revenue per selling day.
 
@@ -200,19 +231,8 @@ def build_kpi_monthly(lines: pd.DataFrame, headers: pd.DataFrame) -> pd.DataFram
         selling_days=("doc_date_iso", "nunique"),
         n_customers=("customer_code", "nunique"),
     )
-    out = pd.concat([rev, docs], axis=1).reset_index()
-    out["revenue_per_selling_day"] = (
-        out["revenue_ex_vat"] / out["selling_days"]).round(2)
-    out["avg_document_value"] = (
-        out["revenue_ex_vat"] / out["n_documents"]).round(2)
-    out["revenue_ex_vat"] = out["revenue_ex_vat"].round(2)
-    out["pct_change_per_selling_day"] = (
-        out["revenue_per_selling_day"].pct_change() * 100).round(1)
-    # The final month is a partial export, not a real decline. Flag it, because
-    # an unflagged partial month on a dashboard reads as a collapse.
-    last = out["month"].max()
-    out["is_partial_month"] = out["month"] == last if _is_partial(hd, last) else False
-    return out.sort_values("month").reset_index(drop=True)
+    agg = pd.concat([rev, docs], axis=1).reset_index()
+    return kpi_from_monthly_aggregates(agg, hd["doc_date_iso"].max())
 
 
 def _is_partial(headers: pd.DataFrame, month: str) -> bool:

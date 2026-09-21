@@ -193,9 +193,8 @@ def overview(scope: Scope = Depends(current_scope)) -> dict:
         groups = table("sales_by_group_month", APP_DATA,
                        "sales_by_group_month.csv", order_by="month")
     else:
-        headers, lines = views.scoped_frames(scope)
-        kpi = views.kpi_monthly(headers, lines)
-        groups = views.by_group_month(lines)
+        kpi = views.kpi_monthly(scope)
+        groups = views.by_group_month(scope)
     total_rev = sum(float(r.get("revenue_ex_vat") or 0) for r in kpi)
     latest = kpi[-1] if kpi else {}
     return {
@@ -226,10 +225,9 @@ def sales(scope: Scope = Depends(current_scope)) -> dict:
                                      "sales_by_person_month.csv", order_by="month"),
             "scope": _scope_note(scope),
         }
-    headers, lines = views.scoped_frames(scope)
     return {
-        "by_group_month": views.by_group_month(lines),
-        "by_person_month": views.by_person_month(headers, lines),
+        "by_group_month": views.by_group_month(scope),
+        "by_person_month": views.by_person_month(scope),
         "scope": _scope_note(scope),
     }
 
@@ -247,10 +245,10 @@ def demand(scope: Scope = Depends(current_scope)) -> dict:
                             "dim_product_group.csv", order_by="sku_prefix"),
             "scope": _scope_note(scope),
         }
-    _, lines = views.scoped_frames(scope)
+    weekly, groups = views.weekly_demand(scope)
     return {
-        "weekly": views.weekly_demand(lines),
-        "groups": views.product_groups(lines),
+        "weekly": weekly,
+        "groups": groups,
         "scope": _scope_note(scope),
     }
 
@@ -328,8 +326,7 @@ def customers(limit: int = 200, scope: Scope = Depends(current_scope)) -> dict:
                                    order_by="monetary desc", limit=limit),
             "scope": _scope_note(scope),
         }
-    headers, lines = views.scoped_frames(scope)
-    out = views.customers(headers, lines, views.company_as_of(), limit=limit)
+    out = views.customers(scope, views.company_as_of(), limit=limit)
     out["scope"] = _scope_note(scope)
     return out
 

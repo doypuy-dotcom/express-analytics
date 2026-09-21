@@ -40,9 +40,52 @@ def dsn() -> str:
     return url
 
 
+# A pool, because the database is not next door. The API runs on Railway and
+# Supabase is in ap-southeast-1; a fresh connection costs a TLS handshake plus
+# authentication across that distance, which measured at ~0.5s from a nearby
+# client and dominated the response time of /api/me -- an endpoint that runs
+# one indexed lookup against a five-row table and was taking 3.9 seconds.
+#
+# Opened lazily rather than at import: the module has to be importable with no
+# DATABASE_URL at all (that is the CSV-fallback mode), and a pool that dials
+# out at import time would turn a missing env var into a crash on boot.
+_POOL = None
+_POOL_DSN: str | None = None
+
+
+def _pool():
+    global _POOL, _POOL_DSN
+    want = dsn()
+    if _POOL is not None and _POOL_DSN == want:
+        return _POOL
+    from psycopg_pool import ConnectionPool
+    if _POOL is not None:
+        _POOL.close()
+    _POOL = ConnectionPool(want, min_size=1, max_size=8, timeout=30,
+                           max_idle=300, kwargs={"autocommit": False},
+                           open=True)
+    _POOL_DSN = want
+    return _POOL
+
+
 @contextmanager
 def connect():
-    with psycopg.connect(dsn(), autocommit=False) as conn:
+    """A pooled connection. Rolled back on the way out unless committed.
+
+    psycopg's own `with connection` commits on a clean exit; the pool's
+    getconn does not, so callers that write must still call conn.commit()
+    -- which every caller here already did, because the old implementation
+    was `with psycopg.connect(...)` wrapped around an explicit commit.
+    """
+    try:
+        pool = _pool()
+    except ImportError:
+        # psycopg_pool missing (older image): fall back to the previous
+        # behaviour rather than failing the request.
+        with psycopg.connect(dsn(), autocommit=False) as conn:
+            yield conn
+        return
+    with pool.connection() as conn:
         yield conn
 
 

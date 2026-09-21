@@ -89,14 +89,35 @@ def build_rfm(headers: pd.DataFrame, lines: pd.DataFrame,
         last_purchase=("doc_date_iso", "max"),
         first_purchase=("doc_date_iso", "min"),
     )
-    per_cust["monetary"] = per_cust.index.map(money).astype(float).round(2)
-    per_cust["recency_days"] = (as_of - per_cust["last_purchase"]).dt.days
-    per_cust["tenure_days"] = (as_of - per_cust["first_purchase"]).dt.days
-    per_cust["avg_order_value"] = (
-        per_cust["monetary"] / per_cust["frequency"]
-    ).round(2)
+    per_cust["monetary"] = per_cust.index.map(money).astype(float)
+    # recency, tenure and avg_order_value are derived in score_rfm, which is
+    # also what the SQL-grouped path calls. Deriving them here as well would
+    # be two definitions of the same three columns.
+    return score_rfm(per_cust.reset_index(), as_of)
 
-    out = per_cust.reset_index()
+
+def score_rfm(per_cust: pd.DataFrame,
+              as_of: str | pd.Timestamp) -> tuple[pd.DataFrame, str]:
+    """Scores and segments, given one row per customer.
+
+    Split from build_rfm so the API can do the per-customer grouping in SQL.
+    A role-scoped customers page that groups in pandas has to pull every line
+    item over the network first; the aggregation is a sum and a count, but the
+    BANDING is the part with judgement in it, so the banding stays here and is
+    shared by both callers.
+
+    `per_cust` needs: customer_code, customer_name, frequency, last_purchase,
+    first_purchase, monetary.
+    """
+    as_of = pd.to_datetime(as_of)
+    out = per_cust.copy()
+    for c in ("last_purchase", "first_purchase"):
+        out[c] = pd.to_datetime(out[c])
+    out["monetary"] = out["monetary"].astype(float).round(2)
+    out["recency_days"] = (as_of - out["last_purchase"]).dt.days
+    out["tenure_days"] = (as_of - out["first_purchase"]).dt.days
+    out["avg_order_value"] = (out["monetary"] / out["frequency"]).round(2)
+
     out["r_score"] = band(out["recency_days"], higher_is_better=False)
     out["f_score"] = band(out["frequency"], higher_is_better=True)
     out["m_score"] = band(out["monetary"], higher_is_better=True)
