@@ -166,6 +166,21 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 12px 0 5px
 .msg.err  { background: #fdeceb; color: var(--bad); border: 1px solid #f6c9c5; }
 .msg.ok   { background: #e8f5ec; color: var(--good); border: 1px solid #bfe3ca; }
 .msg.info { background: #eef4ff; color: #14448f; border: 1px solid #cfe0fb; }
+/* "these numbers cover only your own sales". Deliberately a different colour
+   from .info: it qualifies every figure on the page, not one of them. */
+.msg.scope { background: #f4f0fb; color: #4c2f8f; border: 1px solid #ddd2f2; }
+
+/* users & roles */
+.userbox .muted { margin: 2px 0 7px; line-height: 1.4; }
+table select {
+  font: inherit; font-size: 13px; padding: 4px 6px;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff;
+}
+table select:disabled { background: #f4f6f8; color: var(--muted); }
+.chk { display: inline-flex; align-items: center; gap: 3px; margin-right: 9px; font-size: 13px; }
+.chk input { margin: 0; }
+.teamwrap.off { opacity: .4; }
+button.save { white-space: nowrap; }
 
 .steps { list-style: none; padding: 0; margin: 12px 0 0; font-size: 13px; }
 .steps li { padding: 5px 0; border-bottom: 1px solid var(--line); display: flex; gap: 9px; }

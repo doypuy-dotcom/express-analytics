@@ -62,13 +62,22 @@ def band(series: pd.Series, higher_is_better: bool = True, k: int = SCORE_BANDS)
     return np.clip(np.ceil(pct * k), 1, k).astype(int)
 
 
-def build_rfm(headers: pd.DataFrame, lines: pd.DataFrame) -> tuple[pd.DataFrame, str]:
-    """One row per customer, with R/F/M values, 1-5 scores and a segment."""
+def build_rfm(headers: pd.DataFrame, lines: pd.DataFrame,
+              as_of: str | pd.Timestamp | None = None) -> tuple[pd.DataFrame, str]:
+    """One row per customer, with R/F/M values, 1-5 scores and a segment.
+
+    as_of overrides the "today" that recency is measured back from. It exists
+    for the role-scoped views: when this runs over ONE salesperson's headers
+    the latest date in the subset is the last day *they* sold, so a rep who
+    has been quiet for two months would see all of their customers scored as
+    freshly active. Recency has to be measured from the same day for everyone,
+    which is the last day in the export as a whole.
+    """
     headers = headers[~headers["is_cancelled"].fillna(False)].copy()
     lines = lines[~lines["is_cancelled"].fillna(False)].copy()
 
     headers["doc_date_iso"] = pd.to_datetime(headers["doc_date_iso"])
-    as_of = headers["doc_date_iso"].max()
+    as_of = pd.to_datetime(as_of) if as_of is not None else headers["doc_date_iso"].max()
 
     # Monetary from LINES (amount_ex_vat is the agreed revenue metric, METHODS
     # 2.1); frequency and recency from HEADERS, because a document is one visit

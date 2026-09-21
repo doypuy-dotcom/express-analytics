@@ -176,22 +176,54 @@ def main() -> int:
         print("\nNo file written.", file=sys.stderr)
         return 1
 
-    # Row Level Security: every table is readable only by a signed-in user.
-    # Supabase exposes these over PostgREST with the anon key, so without RLS
-    # the whole dataset would be public to anyone who found the project URL.
+    # Row Level Security. Supabase exposes every table over PostgREST with the
+    # anon key -- which ships to the browser -- so without policies the whole
+    # dataset is readable by anyone who finds the project URL.
+    #
+    # These used to all be `using (true)`: any signed-in user, the entire
+    # dataset. That is precisely what migration 004 exists to stop, so the
+    # rules are emitted here too. If they lived only in the migration,
+    # re-running this generator would quietly hand the company's revenue back
+    # to every salesperson, and nothing would fail to warn anybody.
+    #
+    # The predicate functions (app_can_see, app_is_ceo, app_role) are created
+    # by 004_row_level_visibility.sql, which must be applied first.
     parts += [
         "-- ---------------------------------------------------------------",
-        "-- Row Level Security: signed-in users only.",
-        "-- The backend uses the service_role key and bypasses these; they",
-        "-- exist so that the anon key alone cannot read the data.",
+        "-- Row Level Security -- see migrations/004_row_level_visibility.sql,",
+        "-- which creates the app_can_see() / app_is_ceo() predicates these",
+        "-- policies call. Apply that migration before this file.",
+        "--",
+        "-- The backend connects as service_role and BYPASSES all of this.",
+        "-- These policies are the second layer: they are what stops the anon",
+        "-- key, which is public, from reading the data directly.",
         "-- ---------------------------------------------------------------",
+        "",
     ]
+    # Carries salesperson_code -> filter row by row.
+    ROW_SCOPED = {"sales_header", "sales_lines", "sales_by_person_month"}
+    # Company-wide totals with nothing to filter on -> ceo only. The API
+    # recomputes the others' equivalents from sales_lines (app/views.py).
+    CEO_ONLY = {
+        "kpi_monthly", "sales_by_group_month", "customer_rfm",
+        "customer_segments", "customers", "monthly_sales", "deposits",
+        "deposit_applications", "upload_batches",
+    }
     for table in list(TABLES) + ["upload_batches"]:
+        if table in ROW_SCOPED:
+            using = "app_can_see(salesperson_code)"
+        elif table in CEO_ONLY:
+            using = "app_is_ceo()"
+        else:
+            # Product reference / demand / forecast: no person's revenue in
+            # them. Any user who has been given a role may read them; the
+            # page-level gate for the sales role is a config flag in the API.
+            using = "app_role() <> 'none'"
         parts.append(f"alter table {table} enable row level security;")
         parts.append(
             f"drop policy if exists {table}_read on {table};\n"
             f"create policy {table}_read on {table} for select "
-            f"to authenticated using (true);"
+            f"to authenticated using ({using});"
         )
     parts.append("")
 

@@ -21,11 +21,13 @@ import pandas as pd
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from . import db
+from . import db, views
 from .auth import User, current_user
 from .detect import detect_set
 from .ingest import ingest
+from .scope import ROLES, Scope, current_scope, require_ceo
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 APP_DATA = ROOT / "data" / "app"
@@ -121,8 +123,14 @@ def init_db(user: User = Depends(current_user)) -> dict:
 
 
 @app.get("/api/me")
-def me(user: User = Depends(current_user)) -> dict:
-    return {"id": user.id, "email": user.email, "role": user.role}
+def me(scope: Scope = Depends(current_scope)) -> dict:
+    """Identity, role, and which pages the role may open.
+
+    The frontend uses `pages` to decide what to put in the navigation. That is
+    cosmetic only -- every endpoint enforces the same rule server-side, so
+    hand-typing a URL for a hidden page returns 403 rather than data.
+    """
+    return scope.as_json()
 
 
 # ---------------------------------------------------------------- upload
@@ -130,9 +138,15 @@ def me(user: User = Depends(current_user)) -> dict:
 @app.post("/api/upload")
 async def upload(
     files: list[UploadFile] = File(...),
-    user: User = Depends(current_user),
+    scope: Scope = Depends(current_scope),
 ) -> JSONResponse:
-    """Upload the three Express reports. Type is detected from content."""
+    """Upload the three Express reports. Type is detected from content.
+
+    ceo only. An upload replaces the whole dataset for every user, so it is
+    the one action where a wrong role is not a privacy problem but a data
+    problem.
+    """
+    scope.require("upload")
     if not files:
         raise HTTPException(400, "ไม่พบไฟล์ที่อัปโหลด")
 
@@ -153,7 +167,7 @@ async def upload(
                      "detected": sorted(routed.keys())},
         )
 
-    result = ingest(routed, write_db=use_db(), uploaded_by=user.email)
+    result = ingest(routed, write_db=use_db(), uploaded_by=scope.email)
 
     body: dict[str, Any] = {
         "ok": result.ok,
@@ -172,10 +186,16 @@ async def upload(
 # ------------------------------------------------------------ 1. overview
 
 @app.get("/api/overview")
-def overview(user: User = Depends(current_user)) -> dict:
-    kpi = table("kpi_monthly", APP_DATA, "kpi_monthly.csv", order_by="month")
-    groups = table("sales_by_group_month", APP_DATA, "sales_by_group_month.csv",
-                   order_by="month")
+def overview(scope: Scope = Depends(current_scope)) -> dict:
+    scope.require("overview")
+    if scope.unrestricted:
+        kpi = table("kpi_monthly", APP_DATA, "kpi_monthly.csv", order_by="month")
+        groups = table("sales_by_group_month", APP_DATA,
+                       "sales_by_group_month.csv", order_by="month")
+    else:
+        headers, lines = views.scoped_frames(scope)
+        kpi = views.kpi_monthly(headers, lines)
+        groups = views.by_group_month(lines)
     total_rev = sum(float(r.get("revenue_ex_vat") or 0) for r in kpi)
     latest = kpi[-1] if kpi else {}
     return {
@@ -189,62 +209,96 @@ def overview(user: User = Depends(current_user)) -> dict:
             "latest_revenue": latest.get("revenue_ex_vat"),
             "latest_pct_change_per_selling_day": latest.get("pct_change_per_selling_day"),
         },
+        "scope": _scope_note(scope),
     }
 
 
 # --------------------------------------------------------------- 2. sales
 
 @app.get("/api/sales")
-def sales(user: User = Depends(current_user)) -> dict:
+def sales(scope: Scope = Depends(current_scope)) -> dict:
+    scope.require("sales")
+    if scope.unrestricted:
+        return {
+            "by_group_month": table("sales_by_group_month", APP_DATA,
+                                    "sales_by_group_month.csv", order_by="month"),
+            "by_person_month": table("sales_by_person_month", APP_DATA,
+                                     "sales_by_person_month.csv", order_by="month"),
+            "scope": _scope_note(scope),
+        }
+    headers, lines = views.scoped_frames(scope)
     return {
-        "by_group_month": table("sales_by_group_month", APP_DATA,
-                                "sales_by_group_month.csv", order_by="month"),
-        "by_person_month": table("sales_by_person_month", APP_DATA,
-                                 "sales_by_person_month.csv", order_by="month"),
+        "by_group_month": views.by_group_month(lines),
+        "by_person_month": views.by_person_month(headers, lines),
+        "scope": _scope_note(scope),
     }
 
 
 # -------------------------------------------------------------- 3. demand
 
 @app.get("/api/demand")
-def demand(user: User = Depends(current_user)) -> dict:
+def demand(scope: Scope = Depends(current_scope)) -> dict:
+    scope.require("demand")
+    if scope.unrestricted:
+        return {
+            "weekly": table("weekly_demand", APP_DATA, "weekly_demand.csv",
+                            order_by="week_start"),
+            "groups": table("dim_product_group", APP_DATA,
+                            "dim_product_group.csv", order_by="sku_prefix"),
+            "scope": _scope_note(scope),
+        }
+    _, lines = views.scoped_frames(scope)
     return {
-        "weekly": table("weekly_demand", APP_DATA, "weekly_demand.csv",
-                        order_by="week_start"),
-        "groups": table("dim_product_group", APP_DATA, "dim_product_group.csv",
-                        order_by="sku_prefix"),
+        "weekly": views.weekly_demand(lines),
+        "groups": views.product_groups(lines),
+        "scope": _scope_note(scope),
     }
 
 
 # ------------------------------------------------------------ 4. forecast
 
 @app.get("/api/forecast")
-def forecast(user: User = Depends(current_user)) -> dict:
+def forecast(scope: Scope = Depends(current_scope)) -> dict:
+    """Company-level forecast.
+
+    Unlike revenue, this cannot be sliced by salesperson: the models were
+    fitted on total demand per product group, and a per-rep share of a fitted
+    forecast is not a forecast of anything. So it is served whole or not at
+    all, and `scope.level` says which -- the page prints "ทั้งบริษัท" so that
+    a rep does not read a company number as their own.
+
+    For the sales role this is behind SALES_CAN_SEE_FORECAST, default off.
+    """
+    scope.require("forecast")
     return {
         "next_4_weeks": table("forecast_next_4_weeks", APP_DATA,
                               "forecast_next_4_weeks.csv", order_by="sku_prefix"),
         "trend_alerts": table("trend_alerts", APP_DATA, "trend_alerts.csv",
                               order_by="sku_prefix"),
+        "scope": _scope_note(scope, level="company"),
     }
 
 
 # --------------------------------------------------------------- 5. stock
 
 @app.get("/api/stock")
-def stock(user: User = Depends(current_user)) -> dict:
+def stock(scope: Scope = Depends(current_scope)) -> dict:
+    """Company stock position. Same reasoning as forecast, same flag."""
+    scope.require("stock")
     return {
         "reorder_points": table("reorder_points", APP_DATA, "reorder_points.csv",
                                 order_by="sku_prefix"),
         "stock_check": table("stock_check", APP_DATA, "stock_check.csv",
                              order_by="days_since_last_sale desc"),
+        "scope": _scope_note(scope, level="company"),
     }
 
 
 # ------------------------------------------------------------ 6. accuracy
 
 @app.get("/api/accuracy")
-def accuracy(user: User = Depends(current_user)) -> dict:
-    """Per-group detail plus the pooled headline.
+def accuracy(scope: Scope = Depends(current_scope)) -> dict:
+    """Per-group detail plus the pooled headline. Manager and ceo only.
 
     The pooled figures are computed in the pipeline, not here and not in the
     browser. WAPE is a ratio of sums, so pooling it means re-summing the
@@ -252,23 +306,154 @@ def accuracy(user: User = Depends(current_user)) -> dict:
     percentages, which is what the page used to do, reported 50.9% where the
     real ma8 error is 14.2%.
     """
+    scope.require("accuracy")
     return {
         "model_accuracy": table("model_accuracy", APP_DATA, "model_accuracy.csv"),
         "pooled": table("model_accuracy_pooled", APP_DATA,
                         "model_accuracy_pooled.csv", order_by="scenario"),
+        "scope": _scope_note(scope, level="company"),
     }
 
 
 # ----------------------------------------------------------- 7. customers
 
 @app.get("/api/customers")
-def customers(limit: int = 200, user: User = Depends(current_user)) -> dict:
+def customers(limit: int = 200, scope: Scope = Depends(current_scope)) -> dict:
+    scope.require("customers")
+    if scope.unrestricted:
+        return {
+            "segments": table("customer_segments", CLEAN,
+                              "customer_segments.csv", order_by="revenue desc"),
+            "top_customers": table("customer_rfm", CLEAN, "customer_rfm.csv",
+                                   order_by="monetary desc", limit=limit),
+            "scope": _scope_note(scope),
+        }
+    headers, lines = views.scoped_frames(scope)
+    out = views.customers(headers, lines, views.company_as_of(), limit=limit)
+    out["scope"] = _scope_note(scope)
+    return out
+
+
+def _scope_note(scope: Scope, level: str | None = None) -> dict:
+    """What the numbers in this payload cover.
+
+    Sent with every page so the UI can label a scoped figure as scoped. A
+    salesperson's overview total is not the company's, and a page that shows
+    12,534,217.13 under the heading "รายได้รวม" with nothing else on it is
+    a number that means something different from what it says.
+    """
     return {
-        "segments": table("customer_segments", CLEAN, "customer_segments.csv",
-                          order_by="revenue desc"),
-        "top_customers": table("customer_rfm", CLEAN, "customer_rfm.csv",
-                               order_by="monetary desc", limit=limit),
+        "role": scope.role,
+        "level": level or ("company" if scope.unrestricted else "own"),
+        "codes": scope.codes,
+        "label_th": (
+            "ทั้งบริษัท" if (level == "company" or scope.unrestricted)
+            else ("ทีมของคุณ (" + ", ".join(scope.codes or []) + ")"
+                  if scope.role == "sales_manager"
+                  else "เฉพาะยอดของคุณ (" + (scope.own_code or "-") + ")")
+        ),
     }
+
+
+# ------------------------------------------------------- 8. admin (ceo only)
+
+class RoleAssignment(BaseModel):
+    user_id: str
+    role: str
+    salesperson_code: str | None = None
+    team: list[str] = []
+    email: str | None = None
+
+
+@app.get("/api/admin/users")
+def admin_users(scope: Scope = Depends(require_ceo)) -> dict:
+    """Every account, with its role, code and team.
+
+    Driven from auth.users so that a person who has signed up but never been
+    given a role still appears -- otherwise the ceo cannot grant one and the
+    new user sees an empty site with no explanation.
+    """
+    if not use_db():
+        raise HTTPException(400, "ต้องมีฐานข้อมูล (DATABASE_URL) จึงจะจัดการสิทธิ์ได้")
+    try:
+        users = db.fetch(
+            "select u.id::text as user_id, u.email, u.created_at, "
+            "       p.role, p.salesperson_code "
+            "from   auth.users u left join user_profiles p on p.user_id = u.id "
+            "order by u.created_at"
+        )
+    except Exception:
+        # No auth schema (plain Postgres): fall back to the profile table.
+        users = db.fetch(
+            "select user_id::text as user_id, email, created_at, role, "
+            "salesperson_code from user_profiles order by created_at")
+    teams: dict[str, list[str]] = {}
+    for r in db.fetch("select manager_user_id::text as m, salesperson_code "
+                      "from team_members order by salesperson_code"):
+        teams.setdefault(r["m"], []).append(r["salesperson_code"])
+    for u in users:
+        u["team"] = teams.get(u["user_id"], [])
+        u["role"] = u.get("role") or "none"
+        u["created_at"] = str(u.get("created_at") or "")
+    codes = [r["salesperson_code"] for r in db.fetch(
+        "select distinct salesperson_code from sales_header "
+        "where salesperson_code is not null order by salesperson_code")]
+    return {"users": users, "salesperson_codes": codes,
+            "roles": list(ROLES), "you": scope.user_id}
+
+
+@app.post("/api/admin/users")
+def admin_set_role(body: RoleAssignment,
+                   scope: Scope = Depends(require_ceo)) -> dict:
+    """Assign a role, a code and a team, in one transaction.
+
+    Guards, in order of how badly they would bite:
+
+      * the ceo cannot demote themselves -- with no ceo left, nobody can ever
+        grant the role back, and the only fix is a manual SQL statement
+        against production.
+      * a sales user must have a code. Without one their scope is [] and they
+        get a working login onto an entirely empty dashboard, which reads as
+        "the site is broken" rather than "you are not set up".
+      * a manager's team replaces wholesale rather than merging, so removing
+        somebody from a team is possible at all.
+    """
+    if not use_db():
+        raise HTTPException(400, "ต้องมีฐานข้อมูล (DATABASE_URL) จึงจะจัดการสิทธิ์ได้")
+    if body.role not in ROLES:
+        raise HTTPException(400, f"บทบาทไม่ถูกต้อง: {body.role}")
+    if body.user_id == scope.user_id and body.role != "ceo":
+        raise HTTPException(
+            400, "ไม่สามารถลดสิทธิ์ของตัวเองได้ "
+                 "(ต้องให้บัญชีอื่นเป็น ceo ก่อน มิฉะนั้นจะไม่มีใครแก้สิทธิ์ได้อีก)")
+    code = (body.salesperson_code or "").strip() or None
+    if body.role == "sales" and not code:
+        raise HTTPException(400, "บทบาท sales ต้องระบุรหัสพนักงานขาย")
+    if body.role != "sales":
+        code = None
+    team = sorted({c.strip() for c in body.team if c.strip()}) if body.role == "sales_manager" else []
+    if body.role == "sales_manager" and not team:
+        raise HTTPException(400, "บทบาท sales_manager ต้องระบุรหัสพนักงานขายในทีมอย่างน้อย 1 รหัส")
+
+    with db.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into user_profiles (user_id, email, role, salesperson_code) "
+                "values (%s, %s, %s, %s) "
+                "on conflict (user_id) do update set role = excluded.role, "
+                "  email = coalesce(excluded.email, user_profiles.email), "
+                "  salesperson_code = excluded.salesperson_code, updated_at = now()",
+                (body.user_id, body.email, body.role, code),
+            )
+            cur.execute("delete from team_members where manager_user_id = %s",
+                        (body.user_id,))
+            for c in team:
+                cur.execute(
+                    "insert into team_members (manager_user_id, salesperson_code) "
+                    "values (%s, %s) on conflict do nothing", (body.user_id, c))
+        conn.commit()
+    return {"ok": True, "user_id": body.user_id, "role": body.role,
+            "salesperson_code": code, "team": team}
 
 
 @app.get("/")

@@ -20,7 +20,39 @@ const PAGES = [
   ["accuracy",  "ความแม่นยำ",      "ผลการทดสอบย้อนหลังของโมเดล"],
   ["customers", "ลูกค้า",          "การจัดกลุ่มลูกค้าด้วย RFM"],
   ["upload",    "อัปโหลดข้อมูล",   "นำเข้าไฟล์รายงานจาก Express"],
+  ["admin",     "ผู้ใช้และสิทธิ์",  "กำหนดบทบาท รหัสพนักงานขาย และทีม"],
 ];
+
+// Identity + what this role may open, from GET /api/me. Fetched once per
+// render, never cached across a sign-in.
+//
+// This drives which links appear in the sidebar. That is PRESENTATION ONLY.
+// Every endpoint re-checks the same rule server-side and answers 403, so
+// typing #upload into the address bar as a salesperson gets an error page and
+// not a dataset. Hiding a link is a courtesy; it is not the control.
+let ME = null;
+
+async function loadMe() {
+  try {
+    ME = await api("/api/me");
+  } catch {
+    ME = { role: "none", pages: {} };
+  }
+  return ME;
+}
+
+const allowed = (key) => ME?.pages?.[key] !== false;
+
+// A figure computed over a subset must not sit under a label that says
+// otherwise. Every page payload carries a scope note; this prints it.
+function scopeBanner(s) {
+  if (!s) return "";
+  if (s.level === "company" && s.role === "ceo") return "";
+  const cls = s.level === "company" ? "info" : "scope";
+  const extra = s.level === "company" && s.role !== "ceo"
+    ? " — ตัวเลขหน้านี้เป็นของทั้งบริษัท ไม่ใช่เฉพาะยอดของคุณ" : "";
+  return `<div class="msg ${cls}">ขอบเขตข้อมูล: <b>${esc(s.label_th || "")}</b>${esc(extra)}</div>`;
+}
 
 // ------------------------------------------------------------- utilities
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
@@ -133,6 +165,7 @@ P.overview = async (el) => {
   const d = await api("/api/overview");
   const t = d.totals, k = d.kpi_monthly;
   el.innerHTML = `
+    ${scopeBanner(d.scope)}
     <div class="cards">
       <div class="card"><div class="label">รายได้รวม (ไม่รวม VAT)</div>
         <div class="value">${baht(t.revenue_ex_vat)}</div><div class="sub">${t.months} เดือน</div></div>
@@ -187,6 +220,7 @@ P.sales = async (el) => {
   const palette = ["#1f6feb", "#1a7f37", "#9a6700", "#b42318", "#6f42c1", "#0a7ea4", "#d1671f", "#6b7889"];
 
   el.innerHTML = `
+    ${scopeBanner(d.scope)}
     <div class="panel"><h3>รายได้ตามกลุ่มสินค้า</h3>
       <p class="hint">แสดง 8 กลุ่มที่มีรายได้สูงสุด</p>
       <div class="chart-wrap"><canvas id="c2"></canvas></div></div>
@@ -226,6 +260,7 @@ P.demand = async (el) => {
   const groups = [...new Set(d.weekly.map(r => r.group_name))];
   const sel = groups[0];
   el.innerHTML = `
+    ${scopeBanner(d.scope)}
     <div class="panel"><h3>ความต้องการรายสัปดาห์</h3>
       <p class="hint">เลือกกลุ่มสินค้าเพื่อดูปริมาณขายรายสัปดาห์ (${weeks.length} สัปดาห์)</p>
       <select id="g" style="padding:8px;border-radius:7px;border:1px solid var(--line);font-family:inherit;margin-bottom:12px">
@@ -254,6 +289,7 @@ P.forecast = async (el) => {
   const f = d.next_4_weeks, a = d.trend_alerts;
   const flagged = a.filter(r => r.alert === true || r.alert === "true");
   el.innerHTML = `
+    ${scopeBanner(d.scope)}
     <div class="banner">กลุ่มสินค้าที่ขายไม่สม่ำเสมอ (intermittent) แสดงเป็นค่าประมาณเท่านั้น
       ไม่ควรใช้สั่งซื้อโดยตรง — ให้ใช้จุดสั่งซื้อในหน้า «สต็อก» แทน</div>
     <div class="panel"><h3>พยากรณ์ 4 สัปดาห์ข้างหน้า</h3>
@@ -298,6 +334,7 @@ P.stock = async (el) => {
   const risk = sc.filter(r => r.risk_level === "risk").length;
   const watch = sc.filter(r => r.risk_level === "watch").length;
   el.innerHTML = `
+    ${scopeBanner(d.scope)}
     <div class="cards">
       <div class="card"><div class="label">ควรตรวจสอบ (90 วันขึ้นไป)</div><div class="value">${nf(risk)}</div><div class="sub">รายการ</div></div>
       <div class="card"><div class="label">เฝ้าระวัง (60–89 วัน)</div><div class="value">${nf(watch)}</div><div class="sub">รายการ</div></div>
@@ -342,6 +379,7 @@ P.accuracy = async (el) => {
   const scen = [...new Set(pooled.map(r => r.scenario))];
   const models = [...new Set(pooled.map(r => r.model))];
   el.innerHTML = `
+    ${scopeBanner(d.scope)}
     <div class="panel"><h3>ความแม่นยำของโมเดล (WAPE ยอดรวม 4 สัปดาห์)</h3>
       <p class="hint">ยิ่งต่ำยิ่งดี · «earlier» คือช่วงปกติ «recent» คือช่วงที่ยอดขายกำลังลดลง
         ค่าที่สูงขึ้นในช่วงหลังสะท้อนการเปลี่ยนระดับของยอดขาย ไม่ใช่ความผันผวนรายสัปดาห์
@@ -383,6 +421,7 @@ P.customers = async (el) => {
   const seg = d.segments, top = d.top_customers;
   const totalRev = seg.reduce((a, b) => a + (b.revenue || 0), 0);
   el.innerHTML = `
+    ${scopeBanner(d.scope)}
     <div class="panel"><h3>การจัดกลุ่มลูกค้า (RFM)</h3>
       <p class="hint">R = ซื้อล่าสุดเมื่อไร · F = ซื้อบ่อยแค่ไหน · M = ใช้จ่ายเท่าไร
         คะแนนเป็นควินไทล์ตามลำดับ (แต่ละช่วงมีลูกค้าราว 20%)
@@ -536,24 +575,148 @@ function renderResult(result, msg, d) {
     </div>`;
 }
 
+// ------------------------------------------------------ 8. users & roles
+P.admin = async (el) => {
+  const d = await api("/api/admin/users");
+  const codes = d.salesperson_codes || [];
+
+  const draw = () => {
+    el.innerHTML = `
+      <div class="panel"><h3>ผู้ใช้และสิทธิ์</h3>
+        <p class="hint">บทบาทกำหนดว่าผู้ใช้เห็นข้อมูลแถวไหนได้บ้าง —
+          <b>พนักงานขาย</b> เห็นเฉพาะรหัสของตนเอง ·
+          <b>หัวหน้าทีม</b> เห็นรหัสในทีม ·
+          <b>ผู้บริหาร</b> เห็นทั้งหมด รวมเอกสารที่ไม่มีรหัสพนักงานขาย</p>
+        <div id="amsg"></div>
+        ${table([
+          { key: "email", label: "อีเมล" },
+          { key: "role", label: "บทบาท", render: r => roleSelect(r) },
+          { key: "salesperson_code", label: "รหัสพนักงานขาย", render: r => codeSelect(r) },
+          { key: "team", label: "ทีม (เฉพาะหัวหน้าทีม)", render: r => teamPicker(r) },
+          { key: "save", label: "", render: r =>
+              `<button class="ghost save" data-u="${esc(r.user_id)}">บันทึก</button>` },
+        ], d.users, { scroll: true })}
+      </div>`;
+    wire();
+  };
+
+  const roleSelect = (r) => `<select class="role" data-u="${esc(r.user_id)}">` +
+    [["none", "— ยังไม่กำหนด —"], ["sales", "พนักงานขาย"],
+     ["sales_manager", "หัวหน้าทีมขาย"], ["ceo", "ผู้บริหาร"]]
+      .map(([v, t]) => `<option value="${v}" ${r.role === v ? "selected" : ""}>${t}</option>`)
+      .join("") + "</select>";
+
+  const codeSelect = (r) => `<select class="code" data-u="${esc(r.user_id)}"
+      ${r.role === "sales" ? "" : "disabled"}>
+      <option value="">—</option>` +
+    codes.map(c => `<option value="${esc(c)}" ${r.salesperson_code === c ? "selected" : ""}>${esc(c)}</option>`)
+      .join("") + "</select>";
+
+  // Checkboxes rather than a multi-select: a team is normally two or three
+  // codes out of five, and a multi-select that loses its selection on a
+  // mis-click is how somebody silently ends up managing nobody.
+  const teamPicker = (r) => `<span class="teamwrap ${r.role === "sales_manager" ? "" : "off"}"
+      data-u="${esc(r.user_id)}">` +
+    codes.map(c => `<label class="chk"><input type="checkbox" class="team"
+        data-u="${esc(r.user_id)}" value="${esc(c)}"
+        ${(r.team || []).includes(c) ? "checked" : ""}
+        ${r.role === "sales_manager" ? "" : "disabled"}> ${esc(c)}</label>`).join("") + "</span>";
+
+  const msg = (html) => { el.querySelector("#amsg").innerHTML = html; };
+
+  function wire() {
+    // Enable/disable the code and team controls as the role changes, so the
+    // form cannot express a combination the API will reject.
+    el.querySelectorAll("select.role").forEach(s => s.onchange = () => {
+      const u = s.dataset.u, role = s.value;
+      const code = el.querySelector(`select.code[data-u="${u}"]`);
+      code.disabled = role !== "sales";
+      if (role !== "sales") code.value = "";
+      el.querySelectorAll(`input.team[data-u="${u}"]`).forEach(c => {
+        c.disabled = role !== "sales_manager";
+        if (role !== "sales_manager") c.checked = false;
+      });
+      el.querySelector(`.teamwrap[data-u="${u}"]`)
+        .classList.toggle("off", role !== "sales_manager");
+    });
+
+    el.querySelectorAll("button.save").forEach(b => b.onclick = async () => {
+      const u = b.dataset.u;
+      const row = d.users.find(x => x.user_id === u);
+      const role = el.querySelector(`select.role[data-u="${u}"]`).value;
+      const code = el.querySelector(`select.code[data-u="${u}"]`).value || null;
+      const team = [...el.querySelectorAll(`input.team[data-u="${u}"]:checked`)]
+        .map(c => c.value);
+      if (role === "none") {
+        msg(`<div class="msg err">เลือกบทบาทก่อนบันทึก</div>`); return;
+      }
+      b.disabled = true; b.textContent = "กำลังบันทึก…";
+      try {
+        await api("/api/admin/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: u, role, salesperson_code: code,
+                                 team, email: row?.email }),
+        });
+        Object.assign(row, { role, salesperson_code: code, team });
+        msg(`<div class="msg ok">บันทึกสิทธิ์ของ ${esc(row?.email || u)} แล้ว</div>`);
+        // The signed-in user may have just changed their OWN nav.
+        if (u === ME.user_id) await loadMe();
+      } catch (e) {
+        msg(`<div class="msg err">${esc(e.message)}</div>`);
+      } finally {
+        b.disabled = false; b.textContent = "บันทึก";
+      }
+    });
+  }
+
+  draw();
+};
+
+const ROLE_TH = {
+  ceo: "ผู้บริหาร (เห็นทั้งบริษัท)",
+  sales_manager: "หัวหน้าทีมขาย",
+  sales: "พนักงานขาย",
+  none: "ยังไม่ได้กำหนดสิทธิ์",
+};
+
 // -------------------------------------------------------------- shell
 function shell(active, email) {
+  const links = PAGES.filter(([k]) => allowed(k));
+  const meta = PAGES.find(p => p[0] === active) || PAGES[0];
+  const who = ME?.role
+    ? `<div class="muted" style="font-size:12px">${esc(ROLE_TH[ME.role] || ME.role)}${
+        ME.own_code ? ` · รหัส ${esc(ME.own_code)}` : ""}${
+        ME.team?.length ? ` · ทีม ${esc(ME.team.join(", "))}` : ""}</div>`
+    : "";
   return $(`<div class="shell">
     <aside class="sidebar">
       <div class="brand"><h1>ระบบวิเคราะห์การขาย</h1><p>หลังคาเหล็ก ฉนวนพียูโฟม</p></div>
-      <nav>${PAGES.map(([k, label]) =>
+      <nav>${links.map(([k, label]) =>
         `<a href="#${k}" class="${k === active ? "active" : ""}">${label}</a>`).join("")}</nav>
       <div class="userbox">
-        ${AUTH_ON ? `<div>${esc(email || "")}</div><button class="ghost" id="out">ออกจากระบบ</button>`
+        ${AUTH_ON ? `<div>${esc(email || "")}</div>${who}<button class="ghost" id="out">ออกจากระบบ</button>`
                   : `<div>โหมดไม่ต้องเข้าสู่ระบบ</div>`}
       </div>
     </aside>
     <main class="main">
-      <h2 class="page-title">${PAGES.find(p => p[0] === active)[1]}</h2>
-      <p class="page-sub">${PAGES.find(p => p[0] === active)[2]}</p>
+      <h2 class="page-title">${meta[1]}</h2>
+      <p class="page-sub">${meta[2]}</p>
       <div id="page"><div class="panel"><span class="spinner"></span> กำลังโหลด…</div></div>
     </main>
   </div>`);
+}
+
+function noRoleView(email) {
+  return $(`<div class="login-wrap"><div class="login-card">
+    <h1>บัญชียังไม่ได้รับสิทธิ์</h1>
+    <p class="sub">${esc(email || "")}</p>
+    <div class="msg err">บัญชีนี้เข้าสู่ระบบได้ แต่ยังไม่ได้กำหนดบทบาท
+      จึงยังไม่เห็นข้อมูลใด ๆ</div>
+    <p class="muted">กรุณาแจ้งผู้ดูแลระบบให้กำหนดบทบาทและรหัสพนักงานขายในหน้า
+      «ผู้ใช้และสิทธิ์»</p>
+    <button class="ghost" id="out">ออกจากระบบ</button>
+  </div></div>`);
 }
 
 async function render() {
@@ -565,13 +728,33 @@ async function render() {
     if (!session) { root().replaceChildren(loginView()); return; }
   }
 
+  await loadMe();
+  // A signed-in account with no role would otherwise land on an overview page
+  // full of red error text, which reads as "the site is broken" rather than
+  // "you are not set up yet".
+  if (AUTH_ON && ME?.role === "none") {
+    const v = noRoleView(session?.user?.email);
+    root().replaceChildren(v);
+    v.querySelector("#out")?.addEventListener("click", signOut);
+    return;
+  }
+
   const key = (location.hash.replace("#", "") || "overview");
-  const active = PAGES.some(p => p[0] === key) ? key : "overview";
+  const known = PAGES.some(p => p[0] === key);
+  // Land on the first page this role can actually open, not always overview.
+  const fallback = (PAGES.find(([k]) => allowed(k)) || PAGES[0])[0];
+  const active = known ? key : fallback;
   const view = shell(active, session?.user?.email);
   root().replaceChildren(view);
   view.querySelector("#out")?.addEventListener("click", signOut);
 
   const el = view.querySelector("#page");
+  if (!allowed(active)) {
+    el.innerHTML = `<div class="msg err">ไม่มีสิทธิ์เข้าถึงหน้านี้</div>
+      <p class="muted">บทบาทของคุณคือ «${esc(ROLE_TH[ME.role] || ME.role)}»
+        หากต้องการสิทธิ์เพิ่ม กรุณาติดต่อผู้ดูแลระบบ</p>`;
+    return;
+  }
   try {
     await P[active](el);
   } catch (err) {
