@@ -8,7 +8,15 @@ Two design decisions worth knowing before reading the numbers:
    business has a long tail of one-visit cash customers, so a value-based cut
    (pd.qcut) collapses: the frequency distribution has so many ties at 1 that
    the bin edges are not unique and the call raises. Ranking survives ties and
-   always yields five populated bands.
+   always returns a score.
+
+   It does NOT always populate all five bands, and frequency is the case that
+   proves it: ~60% of customers bought exactly once, all of them tie at the
+   same average rank, and the whole block lands in one band. Measured on one
+   rep's book, f_score used only bands 2, 4 and 5 -- 1 and 3 were empty. That
+   is arithmetic rather than a bug, but it means "f_score 2" reads as "bought
+   once", not "in the second fifth". Recency and monetary tie far less and do
+   come out near-even.
 
 2. Recency is measured from the LAST DATE IN THE EXPORT, not from today, for
    the same reason as the stock check (METHODS 8.4) -- measuring from today
@@ -55,6 +63,10 @@ def band(series: pd.Series, higher_is_better: bool = True, k: int = SCORE_BANDS)
 
     Rank-based so that heavy ties (frequency == 1 for most walk-in customers)
     cannot produce duplicate bin edges the way value-based quintiles do.
+
+    Ties share an average rank, so a large tied block lands entirely in one
+    band and can leave neighbouring bands empty. See the module docstring --
+    this is why the bands are not evenly filled for frequency.
     """
     pct = series.rank(method="average", pct=True)
     if not higher_is_better:
