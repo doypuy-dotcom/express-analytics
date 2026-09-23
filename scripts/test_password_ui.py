@@ -114,6 +114,15 @@ def main():
         tab.wait_for_selector("#reset-email")
         assert tab.locator("#new-password").count() == 0
         print("PASS: recovery opens before role checks; expired link requests a fresh email")
+        # Supabase dashboard/default Site URL links do not necessarily preserve
+        # the app-specific query parameter. These used to silently show login.
+        tab = page(False, "#error=access_denied&error_code=otp_expired")
+        tab.wait_for_selector("#reset-email")
+        assert tab.locator("#forgot-password").count() == 0
+        tab = page(True, "#type=recovery")
+        tab.wait_for_selector("#new-password")
+        assert tab.locator("#current-password").count() == 0
+        print("PASS: bare Site URL callbacks work without the app query marker")
         assert not errors, errors
         print("PASS: zero JavaScript errors; no real emails sent or account passwords changed")
         browser.close()

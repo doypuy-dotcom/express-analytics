@@ -10,9 +10,17 @@ import { passwordView } from "./password.js";
 
 const CFG = window.CONFIG;
 const AUTH_ON = Boolean(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
+// Capture callback intent BEFORE the SDK consumes/removes the URL fragment.
+// Dashboard-generated recovery emails can return to Site URL without our
+// ?auth=recovery marker. Errors also arrive at that bare URL. Never silently
+// turn either case into an ordinary login form.
+const callbackQuery = new URLSearchParams(location.search);
+const callbackFragment = new URLSearchParams(location.hash.slice(1));
+const recoveryError = callbackFragment.has("error") || callbackFragment.has("error_code")
+  || callbackQuery.has("error") || callbackQuery.has("error_code");
+let recoveryRequested = callbackQuery.get("auth") === "recovery"
+  || callbackFragment.get("type") === "recovery" || recoveryError;
 const sb = AUTH_ON ? createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
-let recoveryRequested = new URLSearchParams(location.search).get("auth") === "recovery";
-const recoveryError = new URLSearchParams(location.hash.slice(1)).has("error");
 
 function openPassword(mode) {
   clearCharts();
