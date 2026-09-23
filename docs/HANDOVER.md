@@ -1,5 +1,38 @@
 # Handover
 
+## Password recovery email setup
+
+The login screen now offers **Forgot password**; signed-in users can choose
+**Change password** and verify their current password before setting a new one.
+Both use Supabase Auth directly and leave application roles unchanged.
+
+Before relying on email recovery, check Supabase **Authentication → URL Configuration**:
+
+- Site URL: `https://express-analytics.vercel.app`
+- Add this exact redirect URL: `https://express-analytics.vercel.app/?auth=recovery`
+
+Check the recovery email template still uses Supabase's confirmation link
+(`{{ .ConfirmationURL }}`), and configure an email provider/SMTP suitable for
+staff mailboxes. Supabase's default email service has recipient restrictions
+and rate limits; a successful local UI test does not prove email delivery.
+The application displays delivery failures and rate-limit errors without
+revealing whether an address belongs to an account.
+
+Accounts ending in `.local` do not have deliverable public email inboxes.
+Use real staff email addresses for email-based recovery; an administrator must
+handle recovery for test accounts without real mailboxes.
+
+Verification: `python scripts/test_password_ui.py` checks request routing,
+password confirmation, current-password verification, expired links and the
+Thai/English interface using a mocked provider. It sends no real emails and
+does not change real account passwords. An owner-run inbox-to-password-change
+test is still needed after confirming the settings above. No Supabase
+management token is available in this workspace to verify or update these
+dashboard settings automatically.
+
+References: [Supabase password recovery](https://supabase.com/docs/reference/javascript/auth-resetpasswordforemail),
+[redirect URL configuration](https://supabase.com/docs/guides/auth/redirect-urls).
+
 Everything needed to keep this running, or to hand it to somebody else.
 For how to *use* the system, see `docs/USER_GUIDE_TH.md`. For how it was first
 deployed, see `docs/DEPLOY.md`. For why the numbers are calculated the way they

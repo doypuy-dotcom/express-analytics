@@ -143,6 +143,9 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 12px 0 5px
 .login-card h1 { font-size: 19px; margin: 0 0 5px; }
 .login-card p.sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
 .login-card button { width: 100%; margin-top: 18px; padding: 11px; }
+.password-show { display:flex; align-items:center; gap:8px; }
+.password-card { width:min(440px,94vw); }
+.password-message:empty { display:none; }
 
 /* ------------------------------------------------------------- upload */
 .drop {

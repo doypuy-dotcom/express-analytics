@@ -6,10 +6,39 @@
 // verifiable by opening the file.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.47.10";
+import { passwordView } from "./password.js";
 
 const CFG = window.CONFIG;
 const AUTH_ON = Boolean(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
 const sb = AUTH_ON ? createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
+let recoveryRequested = new URLSearchParams(location.search).get("auth") === "recovery";
+const recoveryError = new URLSearchParams(location.hash.slice(1)).has("error");
+
+function openPassword(mode) {
+  clearCharts();
+  const v = passwordView({
+    client: sb, mode,
+    verifyCurrent: async password => {
+      const { data: { user }, error } = await sb.auth.getUser();
+      if (error || !user?.email) return false;
+      // Reauthenticate in memory. Do not replace the main session or fire its
+      // SIGNED_IN event, which would remove a half-completed password form.
+      const check = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+      const result = await check.auth.signInWithPassword({ email: user.email, password });
+      const valid = !result.error && result.data.user?.id === user.id;
+      if (result.data.session) await check.auth.signOut({ scope: "local" });
+      return valid;
+    },
+    onBack: () => {
+      recoveryRequested = false;
+      history.replaceState(null, "", location.pathname);
+      render();
+    },
+  });
+  root().replaceChildren(v);
+}
 
 const PAGES = [
   ["overview",  "ภาพรวม",          "รายได้และแนวโน้มรายเดือน"],
@@ -161,6 +190,7 @@ function loginView() {
     <label for="pw">รหัสผ่าน</label>
     <input id="pw" type="password" autocomplete="current-password" placeholder="••••••••">
     <button id="go">เข้าสู่ระบบ</button>
+    <button type="button" class="ghost" id="forgot-password">ลืมรหัสผ่าน</button>
   </div></div>`);
 
   const err = v.querySelector("#err");
@@ -185,6 +215,7 @@ function loginView() {
     render();
   };
   go.onclick = submit;
+  v.querySelector("#forgot-password").onclick = () => openPassword("forgot");
   v.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") submit(); }));
   return v;
 }
@@ -1003,7 +1034,7 @@ function shell(active, email) {
       <nav>${links.map(([k, label]) =>
         `<a href="#${k}" class="${k === active ? "active" : ""}">${label}</a>`).join("")}</nav>
       <div class="userbox">
-        ${AUTH_ON ? `<div>${esc(email || "")}</div>${who}<button class="ghost" id="out">ออกจากระบบ</button>`
+        ${AUTH_ON ? `<div>${esc(email || "")}</div>${who}<button class="ghost" id="change-password">เปลี่ยนรหัสผ่าน</button><button class="ghost" id="out">ออกจากระบบ</button>`
                   : `<div>โหมดไม่ต้องเข้าสู่ระบบ</div>`}
       </div>
     </aside>
@@ -1024,6 +1055,7 @@ function noRoleView(email) {
     <p class="muted">กรุณาแจ้งผู้ดูแลระบบให้กำหนดบทบาทและรหัสพนักงานขายในหน้า
       «ผู้ใช้และสิทธิ์»</p>
     <button class="ghost" id="out">ออกจากระบบ</button>
+    <button class="ghost" id="change-password">เปลี่ยนรหัสผ่าน</button>
   </div></div>`);
 }
 
@@ -1033,6 +1065,21 @@ async function render() {
   if (AUTH_ON) {
     const { data } = await sb.auth.getSession();
     session = data.session;
+    // Handle recovery before application role checks. A valid recovery session
+    // may belong to an account with no business role yet.
+    if (recoveryRequested) {
+      openPassword(session && !recoveryError ? "recovery" : "forgot");
+      if (!session || recoveryError) {
+        const note = document.createElement("p");
+        note.className = "msg err";
+        note.textContent = window.UI.language === "en"
+          ? "The reset link is invalid or expired. Request a new link below."
+          : "ลิงก์ตั้งรหัสใหม่ไม่ถูกต้องหรือหมดอายุ กรุณาขอลิงก์ใหม่ด้านล่าง";
+        root().querySelector("h1").after(note);
+      }
+      return;
+    }
+    if (session && location.hash === "#password") { openPassword("change"); return; }
     if (!session) { root().replaceChildren(loginView()); return; }
   }
 
@@ -1044,6 +1091,7 @@ async function render() {
     const v = noRoleView(session?.user?.email);
     root().replaceChildren(v);
     v.querySelector("#out")?.addEventListener("click", signOut);
+    v.querySelector("#change-password")?.addEventListener("click", () => { location.hash = "password"; });
     return;
   }
 
@@ -1055,6 +1103,7 @@ async function render() {
   const view = shell(active, session?.user?.email);
   root().replaceChildren(view);
   view.querySelector("#out")?.addEventListener("click", signOut);
+  view.querySelector("#change-password")?.addEventListener("click", () => { location.hash = "password"; });
 
   const el = view.querySelector("#page");
   if (!allowed(active)) {
@@ -1073,6 +1122,7 @@ async function render() {
 
 window.addEventListener("preferenceschange", e => {
   if (e.detail !== "theme") {
+    root().firstElementChild?.localize?.();
     // Keep selected files, in-flight uploads, admin edits and login fields.
     if (["#upload", "#admin"].includes(location.hash) || !document.querySelector(".main")) return;
     render(); return;
@@ -1088,5 +1138,14 @@ window.addEventListener("preferenceschange", e => {
   });
 });
 window.addEventListener("hashchange", render);
-if (AUTH_ON) sb.auth.onAuthStateChange((e) => { if (e === "SIGNED_IN" || e === "SIGNED_OUT") render(); });
+if (AUTH_ON) sb.auth.onAuthStateChange((e) => {
+  // Never await another Supabase call inside this callback (SDK auth lock).
+  if (e === "PASSWORD_RECOVERY") {
+    recoveryRequested = true;
+    history.replaceState(null, "", location.pathname + "?auth=recovery");
+    setTimeout(render, 0);
+  } else if (e === "SIGNED_IN" || e === "SIGNED_OUT") {
+    setTimeout(render, 0);
+  }
+});
 render();

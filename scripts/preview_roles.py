@@ -93,7 +93,7 @@ def build() -> None:
 
         dest = OUT / role
         dest.mkdir(parents=True)
-        for name in ("index.html", "app.js", "styles.css", "preferences.js"):
+        for name in ("index.html", "app.js", "styles.css", "preferences.js", "password.js"):
             src = ROOT / "frontend" / name
             if src.exists():
                 shutil.copy(src, dest / name)
