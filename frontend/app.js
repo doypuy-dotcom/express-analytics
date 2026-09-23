@@ -86,11 +86,11 @@ const MONTH_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค
 // rendering "NaN undefined" -- a blank last_sale_date is a real row.
 const monthTH = (iso) => {
   const m = /^(\d{4})-(\d{2})/.exec(String(iso ?? ""));
-  return m ? `${MONTH_TH[+m[2] - 1]} ${+m[1] + 543}` : esc(iso ?? "");
+  return m ? (window.UI.language === "en" ? `${window.UI.months[+m[2]-1]} ${m[1]}` : `${MONTH_TH[+m[2] - 1]} ${+m[1] + 543}`) : esc(iso ?? "");
 };
 const dateTH = (iso) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ""));
-  return m ? `${+m[3]} ${MONTH_TH[+m[2] - 1]} ${+m[1] + 543}` : esc(iso ?? "");
+  return m ? (window.UI.language === "en" ? `${+m[3]} ${window.UI.months[+m[2]-1]} ${m[1]}` : `${+m[3]} ${MONTH_TH[+m[2] - 1]} ${+m[1] + 543}`) : esc(iso ?? "");
 };
 
 // A group that has sold nothing for four weeks still had a forecast and a
@@ -108,14 +108,22 @@ const stopped = (r, render) => isStopped(r)
 // Charts must be destroyed before their canvas is replaced or Chart.js keeps
 // the old instance alive and the tooltips of two charts fight each other.
 const CHARTS = [];
-function chart(canvas, cfg) { CHARTS.push(new Chart(canvas, cfg)); }
+function chart(canvas, cfg) {
+  cfg.data.datasets.forEach(d => { d.label = window.UI.text(d.label); });
+  cfg.data.labels = cfg.data.labels?.map(window.UI.text);
+  const ink = getComputedStyle(document.documentElement).getPropertyValue("--muted").trim();
+  const grid = getComputedStyle(document.documentElement).getPropertyValue("--line").trim();
+  Chart.defaults.color = ink;
+  Chart.defaults.borderColor = grid;
+  CHARTS.push(new Chart(canvas, cfg));
+}
 function clearCharts() { while (CHARTS.length) CHARTS.pop().destroy(); }
 
 function table(cols, rows, opts = {}) {
   const head = cols.map(c => `<th class="${c.num ? "num" : ""}">${esc(c.label)}</th>`).join("");
   const body = rows.map(r => "<tr>" + cols.map(c => {
     const v = c.render ? c.render(r) : esc(r[c.key]);
-    return `<td class="${c.num ? "num" : ""}">${v}</td>`;
+    return `<td ${["customer_name", "product_name", "group_name", "name", "customer_code", "sku"].includes(c.key) ? "data-original-value" : ""} class="${c.num ? "num" : ""}">${v}</td>`;
   }).join("") + "</tr>").join("");
   return `<div class="${opts.scroll === false ? "" : "scroll"}"><table>
     <thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
@@ -260,9 +268,12 @@ P.overview = async (el) => {
         <div class="sub">ต่อวันขาย ${signed(t.latest_pct_change_per_selling_day)}</div></div>
     </div>
     ${todayPanel(side)}
-    <div class="panel"><h3>รายได้รายเดือน</h3>
-      <p class="hint">แท่ง = รายได้รวม · เส้น = รายได้ต่อวันที่มีการขาย (ตัดผลของจำนวนวันทำการที่ต่างกันออก)</p>
-      <div class="chart-wrap"><canvas id="c1"></canvas></div></div>
+    <div class="panel"><h3>รายได้รวมรายเดือน</h3>
+      <p class="hint">รายได้รวมไม่รวม VAT ของแต่ละเดือน (บาท)</p>
+      <div class="chart-wrap"><canvas id="monthly-revenue"></canvas></div></div>
+    <div class="panel"><h3>รายได้เฉลี่ยต่อวันขาย</h3>
+      <p class="hint">รายได้หารด้วยจำนวนวันที่มีการขาย ช่วยเปรียบเทียบเดือนที่มีวันขายไม่เท่ากัน (บาท/วันขาย)</p>
+      <div class="chart-wrap"><canvas id="daily-revenue"></canvas></div></div>
     <div class="panel"><h3>ตารางรายเดือน</h3>
       ${table([
         { key: "month", label: "เดือน", render: r => monthTH(r.month) },
@@ -280,26 +291,19 @@ P.overview = async (el) => {
         { key: "pct_change_per_selling_day", label: "เปลี่ยนแปลง (ต่อวันขาย)", num: true, render: r => signed(r.pct_change_per_selling_day) },
       ], k, { scroll: false })}</div>`;
 
-  chart(el.querySelector("#c1"), {
-    data: {
-      labels: k.map(r => monthTH(r.month)),
-      datasets: [
-        { type: "bar", label: "รายได้", data: k.map(r => r.revenue_ex_vat), backgroundColor: "#a8c7fa", yAxisID: "y" },
-        { type: "line", label: "ต่อวันขาย", data: k.map(r => r.revenue_per_selling_day), borderColor: "#b42318", backgroundColor: "#b42318", yAxisID: "y1", tension: .25 },
-      ],
-    },
-    options: {
-      maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-      scales: {
-        y: { position: "left", beginAtZero: true, min: 0, ticks: { callback: v => (v / 1e6).toFixed(1) + "M" } },
-        // Both axes start at 0. Chart.js otherwise fits the right-hand axis to
-        // the data range, so a per-selling-day line that moves 5% drew as a
-        // cliff against a bar axis that did start at 0 -- two series on one
-        // chart with different baselines, read as one picture.
-        y1: { position: "right", beginAtZero: true, min: 0, grid: { drawOnChartArea: false }, ticks: { callback: v => (v / 1e3).toFixed(0) + "K" } },
-      },
-    },
-  });
+  for (const [id, type, field, label, color] of [
+    ["monthly-revenue", "bar", "revenue_ex_vat", "รายได้รวมรายเดือน", "#79aaff"],
+    ["daily-revenue", "line", "revenue_per_selling_day", "รายได้เฉลี่ยต่อวันขาย", "#e36555"],
+  ]) {
+    chart(el.querySelector(`#${id}`), {
+      type,
+      data: { labels: k.map(r => monthTH(r.month)), datasets: [{ label,
+        data: k.map(r => r[field]), backgroundColor: color, borderColor: color,
+        tension: .25, pointRadius: 4 }] },
+      options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+        scales: { y: { beginAtZero: true, min: 0, ticks: { callback: v => nf(v) } } } },
+    });
+  }
 };
 
 // rows x columns from a long payload, plus a row total and a column total.
@@ -1067,6 +1071,22 @@ async function render() {
   }
 }
 
+window.addEventListener("preferenceschange", e => {
+  if (e.detail !== "theme") {
+    // Keep selected files, in-flight uploads, admin edits and login fields.
+    if (["#upload", "#admin"].includes(location.hash) || !document.querySelector(".main")) return;
+    render(); return;
+  }
+  const styles = getComputedStyle(document.documentElement);
+  const color = styles.getPropertyValue("--muted").trim();
+  const grid = styles.getPropertyValue("--line").trim();
+  Chart.defaults.color = color; Chart.defaults.borderColor = grid;
+  CHARTS.forEach(c => {
+    c.options.plugins.legend.labels.color = color;
+    Object.values(c.options.scales).forEach(axis => { axis.ticks.color = color; axis.grid.color = grid; });
+    c.update();
+  });
+});
 window.addEventListener("hashchange", render);
 if (AUTH_ON) sb.auth.onAuthStateChange((e) => { if (e === "SIGNED_IN" || e === "SIGNED_OUT") render(); });
 render();

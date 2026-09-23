@@ -204,3 +204,22 @@ button.save { white-space: nowrap; }
   .sidebar { width: 100%; flex: none; }
   .main { padding: 16px; }
 }
+
+/* Persistent display controls, available on login and every role's pages. */
+.preferences { display:flex; justify-content:flex-end; gap:10px; padding:10px 20px; background:var(--panel); border-bottom:1px solid var(--line); }
+.preferences button { background:var(--bg); color:var(--ink); border:1px solid var(--line); min-height:40px; }
+button:focus-visible, a:focus-visible, select:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+.main { min-width:0; width:100%; }
+.panel { overflow-x:auto; }
+:root[data-theme="dark"] { --bg:#101722; --panel:#192332; --ink:#e8eef7; --muted:#aab9cc; --line:#35455b; --accent:#82b5ff; --good:#7cdda0; --warn:#f5cf75; --bad:#ff9a92; color-scheme:dark; }
+[data-theme="dark"] nav a:hover, [data-theme="dark"] tbody tr:hover { background:#233349; }
+[data-theme="dark"] nav a.active { background:#253c5b; }
+[data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] .filelist li, [data-theme="dark"] .drop { background:var(--bg); color:var(--ink); }
+[data-theme="dark"] button.ghost, [data-theme="dark"] .pill.flat { background:#2d3b50; color:var(--ink); }
+[data-theme="dark"] .msg.info { background:#203553; color:#c5ddff; border-color:#405f86; }
+[data-theme="dark"] .msg.scope { background:#332b4d; color:#d9c9ff; border-color:#574777; }
+[data-theme="dark"] .banner, [data-theme="dark"] .pill.warn { background:#40351f; color:var(--warn); border-color:#6d5934; }
+[data-theme="dark"] .msg.err, [data-theme="dark"] .pill.bad { background:#462c31; color:var(--bad); border-color:#765057; }
+[data-theme="dark"] .msg.ok, [data-theme="dark"] .pill.good { background:#203d32; color:var(--good); border-color:#3d6957; }
+[data-theme="dark"] .bar { background:#35455b; }
+@media (max-width:600px) { .preferences { padding:8px 12px; } .chart-wrap { height:260px; } .login-card { width:min(370px,94vw); } }
